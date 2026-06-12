@@ -3,18 +3,26 @@ name: Build LGPL libmpv
 on:
   workflow_dispatch:
     inputs:
-      platform:
-        description: Platform to build
-        required: true
-        default: all
-        type: choice
-        options:
-          - all
-          - linux
-          - windows
-          - android
-          - android-armv7
-          - android-arm64
+      build_linux:
+        description: Build Linux x86_64
+        required: false
+        default: true
+        type: boolean
+      build_windows:
+        description: Build Windows x86_64
+        required: false
+        default: true
+        type: boolean
+      build_android_armv7:
+        description: Build Android armeabi-v7a
+        required: false
+        default: true
+        type: boolean
+      build_android_arm64:
+        description: Build Android arm64-v8a
+        required: false
+        default: true
+        type: boolean
 
 env:
   MPV_REPO: https://github.com/mpv-player/mpv.git
@@ -27,7 +35,7 @@ env:
 jobs:
   build-linux:
     name: Linux x86_64
-    if: ${{ inputs.platform == 'all' || inputs.platform == 'linux' }}
+    if: ${{ inputs.build_linux }}
     runs-on: ubuntu-latest
     env:
       PREFIX: ${{ github.workspace }}/_prefix/linux-x86_64
@@ -143,7 +151,7 @@ jobs:
 
   build-windows:
     name: Windows x86_64
-    if: ${{ inputs.platform == 'all' || inputs.platform == 'windows' }}
+    if: ${{ inputs.build_windows }}
     runs-on: windows-latest
     steps:
       - name: Setup MSYS2
@@ -180,7 +188,11 @@ jobs:
           export PATH="$PREFIX/bin:/mingw64/bin:$PATH"
           export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:/mingw64/lib/pkgconfig"
           mkdir -p "$PREFIX"
-          command -v x86_64-w64-mingw32-ar
+          command -v gcc
+          command -v ar
+          command -v ranlib
+          command -v nm
+          command -v windres
 
           git clone --depth 1 --branch "$FFMPEG_REF" "$FFMPEG_REPO" ffmpeg-src
           pushd ffmpeg-src
@@ -189,8 +201,14 @@ jobs:
             --libdir="$PREFIX/lib" \
             --target-os=mingw32 \
             --arch=x86_64 \
-            --enable-cross-compile \
-            --cross-prefix=x86_64-w64-mingw32- \
+            --cc=gcc \
+            --cxx=g++ \
+            --ar=ar \
+            --ranlib=ranlib \
+            --nm=nm \
+            --strip=strip \
+            --windres=windres \
+            --pkg-config=pkg-config \
             --enable-shared \
             --disable-static \
             --disable-gpl \
@@ -289,11 +307,11 @@ jobs:
 
   build-android:
     name: Android ${{ matrix.arch }}
-    if: ${{ inputs.platform == 'all' || startsWith(inputs.platform, 'android') }}
+    if: ${{ inputs.build_android_armv7 || inputs.build_android_arm64 }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(inputs.platform == 'android-armv7' && '{"include":[{"arch":"armv7l","abi":"armeabi-v7a"}]}' || inputs.platform == 'android-arm64' && '{"include":[{"arch":"arm64","abi":"arm64-v8a"}]}' || '{"include":[{"arch":"armv7l","abi":"armeabi-v7a"},{"arch":"arm64","abi":"arm64-v8a"}]}') }}
+      matrix: ${{ fromJSON(inputs.build_android_armv7 && inputs.build_android_arm64 && '{"include":[{"arch":"armv7l","abi":"armeabi-v7a"},{"arch":"arm64","abi":"arm64-v8a"}]}' || inputs.build_android_armv7 && '{"include":[{"arch":"armv7l","abi":"armeabi-v7a"}]}' || '{"include":[{"arch":"arm64","abi":"arm64-v8a"}]}') }}
     steps:
       - name: Install host dependencies
         run: |
