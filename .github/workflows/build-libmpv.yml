@@ -1,10 +1,6 @@
 name: Build LGPL libmpv (Linux, Windows, Android)
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
   workflow_dispatch:
     inputs:
       build_linux:
@@ -357,7 +353,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - arch: armv7
+          - arch: armeabi-v7a
             clang_prefix: armv7a-linux-androideabi
             ffmpeg_arch: arm
             ffmpeg_cpu: armv7-a
@@ -366,7 +362,7 @@ jobs:
             vcpkg_host: armv7a-linux-androideabi
             android_abi: armeabi-v7a
             android_neon: "ON"
-          - arch: arm64
+          - arch: arm64-v8a
             clang_prefix: aarch64-linux-android
             ffmpeg_arch: aarch64
             ffmpeg_cpu: armv8-a
