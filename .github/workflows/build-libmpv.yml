@@ -184,11 +184,19 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential git meson ninja-build pkg-config nasm \
+            build-essential git ninja-build pkg-config nasm python3-venv \
             libdrm-dev libegl1-mesa-dev libfontconfig1-dev libfreetype-dev \
             libfribidi-dev libgl1-mesa-dev libharfbuzz-dev libpulse-dev \
             libva-dev libvdpau-dev \
             libx11-dev libxext-dev libxinerama-dev libxrandr-dev libxv-dev
+
+      - name: Install Meson from PyPI
+        run: |
+          python3 -m venv "$RUNNER_TEMP/meson-venv"
+          "$RUNNER_TEMP/meson-venv/bin/pip" install --upgrade pip
+          "$RUNNER_TEMP/meson-venv/bin/pip" install "meson==1.4.2"
+          echo "$RUNNER_TEMP/meson-venv/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/meson-venv/bin/meson" --version
 
       - name: Cache FFmpeg (Linux)
         id: cache-ffmpeg-linux
@@ -340,6 +348,7 @@ jobs:
           install: >-
             base-devel
             git
+            mingw-w64-x86_64-cmake
             mingw-w64-x86_64-freetype
             mingw-w64-x86_64-fribidi
             mingw-w64-x86_64-gcc
@@ -350,6 +359,7 @@ jobs:
             mingw-w64-x86_64-pkgconf
             mingw-w64-x86_64-python
             mingw-w64-x86_64-shaderc
+            mingw-w64-x86_64-spirv-cross
             mingw-w64-x86_64-vulkan-headers
             mingw-w64-x86_64-vulkan-loader
 
@@ -408,6 +418,7 @@ jobs:
         run: |
           WORKDIR="$(cygpath -u "$GITHUB_WORKSPACE")"
           cp -a "$WORKDIR/source-code-lgpl/libplacebo-src" "$WORKDIR/libplacebo-src-win64"
+          pkg-config --modversion spirv-cross-c-shared
           meson setup "$WORKDIR/libplacebo-build-win64" "$WORKDIR/libplacebo-src-win64" \
             --prefix="$WORKDIR/libplacebo-win64" \
             --libdir=lib \
@@ -593,8 +604,18 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            autoconf automake build-essential curl git libtool meson ninja-build \
-            pkg-config python3 unzip zip
+            autoconf automake build-essential curl git libtool ninja-build \
+            pkg-config python3 python3-venv unzip zip
+
+      - name: Install Meson from PyPI
+        if: steps.platform.outputs.selected == 'true'
+        run: |
+          python3 -m venv "$RUNNER_TEMP/meson-venv"
+          "$RUNNER_TEMP/meson-venv/bin/pip" install --upgrade pip
+          "$RUNNER_TEMP/meson-venv/bin/pip" install "meson==1.4.2"
+          echo "$RUNNER_TEMP/meson-venv/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/meson-venv/bin/meson" --version
+
 
       - name: Cache Android NDK
         if: steps.platform.outputs.selected == 'true'
@@ -726,8 +747,10 @@ jobs:
             --disable-doc --disable-programs \
             --cc="$CC_ANDROID" --cxx="$CXX_ANDROID" \
             --ar="$AR_ANDROID" --ranlib="$RANLIB_ANDROID" --nm="$NM_ANDROID" --strip="$STRIP_ANDROID" \
+            --enable-cross-compile \
             --target-os=android --arch=${{ matrix.ffmpeg_arch }} --cpu=${{ matrix.ffmpeg_cpu }} \
             --enable-neon --enable-jni --enable-mediacodec \
+            --disable-vulkan \
             --sysroot="$SYSROOT"
           make -j"$(nproc)"
           make install
