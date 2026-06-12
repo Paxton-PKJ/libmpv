@@ -2,8 +2,6 @@ name: Build LGPL libmpv
 
 on:
   workflow_dispatch:
-  push:
-    branches: [master, main]
 
 env:
   MPV_REPO: https://github.com/mpv-player/mpv.git
@@ -144,6 +142,7 @@ jobs:
             make
             nasm
             pactoys
+            mingw-w64-x86_64-binutils
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-fontconfig
             mingw-w64-x86_64-freetype
@@ -166,6 +165,7 @@ jobs:
           export PATH="$PREFIX/bin:/mingw64/bin:$PATH"
           export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:/mingw64/lib/pkgconfig"
           mkdir -p "$PREFIX"
+          command -v x86_64-w64-mingw32-ar
 
           git clone --depth 1 --branch "$FFMPEG_REF" "$FFMPEG_REPO" ffmpeg-src
           pushd ffmpeg-src
@@ -289,7 +289,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             autoconf automake build-essential ca-certificates cmake default-jdk-headless \
-            gperf git libtool meson nasm ninja-build pkg-config python3 unzip wget
+            gperf git libtool nasm ninja-build pkg-config python3 python3-pip unzip wget
+          python3 -m pip install --user --upgrade --break-system-packages 'meson>=1.11.0'
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/meson" --version
 
       - name: Clone mpv-android build scripts
         run: |
