@@ -150,10 +150,11 @@ jobs:
           - Android API level: ${API_LEVEL}
 
           FFmpeg is configured with --disable-gpl --disable-version3.
+          FFmpeg HTTPS is enabled with GnuTLS on Linux/Android and SChannel on Windows.
           mpv is configured with -Dgpl=false and -Dlibmpv=true.
           Windows renders via libplacebo with Vulkan; Linux and Android render via OpenGL / OpenGL ES.
           libplacebo includes a Python 3.14 compatibility patch for src/vulkan/utils_gen.py.
-          Android libass and its dependencies are built with the pinned vcpkg tree (shipped as the separate vcpkg-src artifact).
+          Android libass, GnuTLS, and their dependencies are built with the pinned vcpkg tree (shipped as the separate vcpkg-src artifact).
           EOF
 
       - name: Upload source bundle
@@ -201,7 +202,7 @@ jobs:
             build-essential git ninja-build pkg-config nasm python3-venv \
             libdrm-dev libegl1-mesa-dev libfontconfig1-dev libfreetype-dev \
             libfribidi-dev libgl1-mesa-dev libharfbuzz-dev libpulse-dev \
-            libva-dev libvdpau-dev \
+            libgnutls28-dev libva-dev libvdpau-dev \
             libx11-dev libxext-dev libxinerama-dev libxrandr-dev libxv-dev
 
       - name: Install Meson from PyPI
@@ -217,7 +218,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/ffmpeg-lgpl-linux
-          key: ffmpeg-lgpl-linux-${{ env.FFMPEG_VERSION }}-r1
+          key: ffmpeg-lgpl-linux-${{ env.FFMPEG_VERSION }}-r2
 
       - name: Build FFmpeg (LGPL) for Linux
         if: steps.cache-ffmpeg-linux.outputs.cache-hit != 'true'
@@ -228,8 +229,14 @@ jobs:
             --disable-gpl --disable-version3 \
             --enable-shared --disable-static \
             --disable-doc --disable-programs --disable-outdevs \
+            --enable-gnutls \
             --enable-libdrm
-          grep -E '^(CONFIG_(VAAPI|VDPAU|LIBDRM)|HAVE_(VAAPI|VDPAU|LIBDRM))=yes' ffbuild/config.mak || true
+          grep -E '^(CONFIG_(HTTP_PROTOCOL|HTTPS_PROTOCOL|TLS_PROTOCOL|TCP_PROTOCOL|GNUTLS|VAAPI|VDPAU|LIBDRM)|HAVE_(VAAPI|VDPAU|LIBDRM))=yes' ffbuild/config.mak || true
+          grep -q '^CONFIG_GNUTLS=yes' ffbuild/config.mak
+          grep -q '^CONFIG_TCP_PROTOCOL=yes' ffbuild/config.mak
+          grep -q '^CONFIG_HTTP_PROTOCOL=yes' ffbuild/config.mak
+          grep -q '^CONFIG_TLS_PROTOCOL=yes' ffbuild/config.mak
+          grep -q '^CONFIG_HTTPS_PROTOCOL=yes' ffbuild/config.mak
           grep -q '^CONFIG_VAAPI=yes' ffbuild/config.mak
           grep -q '^CONFIG_VDPAU=yes' ffbuild/config.mak
           grep -q '^CONFIG_LIBDRM=yes' ffbuild/config.mak
@@ -401,9 +408,16 @@ jobs:
             --enable-shared --disable-static \
             --disable-gpl --disable-version3 \
             --disable-doc --disable-programs \
+            --enable-schannel \
             --disable-vulkan \
             --disable-cuda-llvm --disable-cuvid \
             --disable-ffnvcodec --disable-nvdec --disable-nvenc
+          grep -E '^(CONFIG_(HTTP_PROTOCOL|HTTPS_PROTOCOL|TLS_PROTOCOL|TCP_PROTOCOL|SCHANNEL))=yes' ffbuild/config.mak || true
+          grep -q '^CONFIG_SCHANNEL=yes' ffbuild/config.mak
+          grep -q '^CONFIG_TCP_PROTOCOL=yes' ffbuild/config.mak
+          grep -q '^CONFIG_HTTP_PROTOCOL=yes' ffbuild/config.mak
+          grep -q '^CONFIG_TLS_PROTOCOL=yes' ffbuild/config.mak
+          grep -q '^CONFIG_HTTPS_PROTOCOL=yes' ffbuild/config.mak
           make -j"$(nproc)"
           make install
 
@@ -682,9 +696,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/vcpkg
-          key: vcpkg-tree-${{ matrix.vcpkg_triplet }}-${{ env.VCPKG_REF }}-${{ env.API_LEVEL }}-libass
+          key: vcpkg-tree-${{ matrix.vcpkg_triplet }}-${{ env.VCPKG_REF }}-${{ env.API_LEVEL }}-libass-gnutls
 
-      - name: Set up vcpkg triplet for libass
+      - name: Set up vcpkg triplet for Android dependencies
         if: steps.platform.outputs.selected == 'true'
         run: |
           # On a cache miss, populate vcpkg from the downloaded source tree. It is
@@ -728,11 +742,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/vcpkg-binary-cache
-          key: vcpkg-binary-${{ matrix.vcpkg_triplet }}-${{ env.VCPKG_REF }}-${{ env.API_LEVEL }}-libass
+          key: vcpkg-binary-${{ matrix.vcpkg_triplet }}-${{ env.VCPKG_REF }}-${{ env.API_LEVEL }}-libass-gnutls
           restore-keys: |
             vcpkg-binary-${{ matrix.vcpkg_triplet }}-${{ env.VCPKG_REF }}-
 
-      - name: Build libass dependency with vcpkg
+      - name: Build libass and GnuTLS dependencies with vcpkg
         if: steps.platform.outputs.selected == 'true' && steps.cache-vcpkg-tree.outputs.cache-hit != 'true'
         run: |
           mkdir -p "$RUNNER_TEMP/vcpkg-binary-cache"
@@ -740,7 +754,10 @@ jobs:
           export ANDROID_NDK_ROOT="$NDK_PATH"
           export VCPKG_DEFAULT_BINARY_CACHE="$RUNNER_TEMP/vcpkg-binary-cache"
           export VCPKG_BINARY_SOURCES="clear;files,$RUNNER_TEMP/vcpkg-binary-cache,readwrite"
-          "$RUNNER_TEMP/vcpkg/vcpkg" install "libass:${{ matrix.vcpkg_triplet }}" --clean-after-build
+          "$RUNNER_TEMP/vcpkg/vcpkg" install \
+            "libass:${{ matrix.vcpkg_triplet }}" \
+            "libgnutls:${{ matrix.vcpkg_triplet }}" \
+            --clean-after-build
 
       - name: Cache FFmpeg (Android ${{ matrix.arch }})
         if: steps.platform.outputs.selected == 'true'
@@ -748,24 +765,33 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/ffmpeg-lgpl-android-${{ matrix.arch }}
-          key: ffmpeg-lgpl-android-${{ matrix.arch }}-${{ env.FFMPEG_VERSION }}-r1
+          key: ffmpeg-lgpl-android-${{ matrix.arch }}-${{ env.FFMPEG_VERSION }}-r2
 
       - name: Build FFmpeg (LGPL) for Android ${{ matrix.arch }}
         if: steps.platform.outputs.selected == 'true' && steps.cache-ffmpeg-android.outputs.cache-hit != 'true'
         run: |
           cp -a "$RUNNER_TEMP/source-code-lgpl/ffmpeg-src" "$RUNNER_TEMP/ffmpeg-src-android-${{ matrix.arch }}"
           cd "$RUNNER_TEMP/ffmpeg-src-android-${{ matrix.arch }}"
+          export PKG_CONFIG_LIBDIR="$RUNNER_TEMP/vcpkg/installed/${{ matrix.vcpkg_triplet }}/lib/pkgconfig:$RUNNER_TEMP/vcpkg/installed/${{ matrix.vcpkg_triplet }}/share/pkgconfig"
           ./configure --prefix="$RUNNER_TEMP/ffmpeg-lgpl-android-${{ matrix.arch }}" \
             --enable-shared --disable-static \
             --disable-gpl --disable-version3 \
             --disable-doc --disable-programs \
+            --pkg-config=pkg-config --pkg-config-flags="--static" \
             --cc="$CC_ANDROID" --cxx="$CXX_ANDROID" \
             --ar="$AR_ANDROID" --ranlib="$RANLIB_ANDROID" --nm="$NM_ANDROID" --strip="$STRIP_ANDROID" \
             --enable-cross-compile \
             --target-os=android --arch=${{ matrix.ffmpeg_arch }} --cpu=${{ matrix.ffmpeg_cpu }} \
             --enable-neon --enable-jni --enable-mediacodec \
+            --enable-gnutls \
             --disable-vulkan \
             --sysroot="$SYSROOT"
+          grep -E '^(CONFIG_(HTTP_PROTOCOL|HTTPS_PROTOCOL|TLS_PROTOCOL|TCP_PROTOCOL|GNUTLS))=yes' ffbuild/config.mak || true
+          grep -q '^CONFIG_GNUTLS=yes' ffbuild/config.mak
+          grep -q '^CONFIG_TCP_PROTOCOL=yes' ffbuild/config.mak
+          grep -q '^CONFIG_HTTP_PROTOCOL=yes' ffbuild/config.mak
+          grep -q '^CONFIG_TLS_PROTOCOL=yes' ffbuild/config.mak
+          grep -q '^CONFIG_HTTPS_PROTOCOL=yes' ffbuild/config.mak
           make -j"$(nproc)"
           make install
 
