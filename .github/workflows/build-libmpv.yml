@@ -1,54 +1,136 @@
 name: Build LGPL libmpv
 
 on:
-  workflow_dispatch: # 允许手动触发
+  workflow_dispatch:
   push:
-    branches: [ main ]
+    branches: [master, main]
+
+env:
+  MPV_REPO: https://github.com/mpv-player/mpv.git
+  MPV_REF: master
+  FFMPEG_REPO: https://github.com/FFmpeg/FFmpeg.git
+  FFMPEG_REF: n8.1.1
+  LIBPLACEBO_REPO: https://code.videolan.org/videolan/libplacebo.git
+  LIBASS_REPO: https://github.com/libass/libass.git
 
 jobs:
-  # ==========================================
-  # 1. Linux 平台构建 (Ubuntu)
-  # ==========================================
   build-linux:
+    name: Linux x86_64
     runs-on: ubuntu-latest
+    env:
+      PREFIX: ${{ github.workspace }}/_prefix/linux-x86_64
+      PKG_CONFIG_PATH: ${{ github.workspace }}/_prefix/linux-x86_64/lib/pkgconfig
+      LD_LIBRARY_PATH: ${{ github.workspace }}/_prefix/linux-x86_64/lib
     steps:
-      - name: Install Dependencies
+      - name: Install host dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y git build-essential meson ninja-build pkg-config \
-            libssl-dev libasound2-dev libvdpau-dev libva-dev libpulse-dev
-          
+          sudo apt-get install -y --no-install-recommends \
+            autoconf automake build-essential ca-certificates cmake git \
+            libfontconfig1-dev libfreetype-dev libfribidi-dev libgl-dev \
+            libharfbuzz-dev libtool meson nasm ninja-build pkg-config \
+            python3 python3-pip wget zlib1g-dev
+
       - name: Build LGPL FFmpeg
         run: |
-          git clone --depth 1 -b n6.1.1 https://git.ffmpeg.org/ffmpeg.git ffmpeg-src
+          git clone --depth 1 --branch "$FFMPEG_REF" "$FFMPEG_REPO" ffmpeg-src
           cd ffmpeg-src
-          # 关键：不含 --enable-gpl
-          ./configure --prefix=/usr/local --enable-shared --disable-static \
-            --disable-gpl --disable-nonfree --disable-doc --disable-programs
-          make -j$(nproc)
-          sudo make install
-          sudo ldconfig
+          ./configure \
+            --prefix="$PREFIX" \
+            --libdir="$PREFIX/lib" \
+            --enable-shared \
+            --disable-static \
+            --disable-gpl \
+            --disable-nonfree \
+            --disable-doc \
+            --disable-programs \
+            --disable-autodetect \
+            --enable-zlib
+          make -j"$(nproc)"
+          make install
+
+      - name: Build libplacebo
+        run: |
+          git clone --depth 1 --recursive --shallow-submodules "$LIBPLACEBO_REPO" libplacebo-src
+          meson setup libplacebo-src/build libplacebo-src \
+            --prefix="$PREFIX" \
+            --libdir=lib \
+            --default-library=shared \
+            -Dvulkan=disabled \
+            -Dopengl=disabled \
+            -Dd3d11=disabled \
+            -Dshaderc=disabled \
+            -Dglslang=disabled \
+            -Dlcms=disabled \
+            -Ddovi=disabled \
+            -Dlibdovi=disabled \
+            -Dxxhash=disabled \
+            -Dunwind=disabled \
+            -Ddemos=false \
+            -Dtests=false
+          meson compile -C libplacebo-src/build
+          meson install -C libplacebo-src/build
+
+      - name: Build libass
+        run: |
+          git clone --depth 1 "$LIBASS_REPO" libass-src
+          meson setup libass-src/build libass-src \
+            --prefix="$PREFIX" \
+            --libdir=lib \
+            --default-library=shared \
+            -Dtest=disabled \
+            -Dcompare=disabled \
+            -Dprofile=disabled \
+            -Dfuzz=disabled \
+            -Dcheckasm=disabled
+          meson compile -C libass-src/build
+          meson install -C libass-src/build
 
       - name: Build LGPL libmpv
         run: |
-          git clone https://github.com/mpv-player/mpv.git
-          cd mpv
-          # 关键：-Dgpl=false 确保 mpv 本身是 LGPL
-          meson setup build -Dlibmpv=true -Dcplayer=false -Dgpl=false
-          ninja -C build
+          git clone --depth 1 --branch "$MPV_REF" "$MPV_REPO" mpv-src
+          meson setup mpv-src/build mpv-src \
+            --prefix="$PREFIX" \
+            --libdir=lib \
+            -Dlibmpv=true \
+            -Dcplayer=false \
+            -Dgpl=false \
+            -Dbuild-date=false \
+            -Dlua=disabled \
+            -Djavascript=disabled \
+            -Dmanpage-build=disabled \
+            -Dvulkan=disabled \
+            -Dshaderc=disabled \
+            -Dspirv-cross=disabled
+          meson compile -C mpv-src/build
+          meson install -C mpv-src/build
 
-      - name: Upload Linux Artifact
+      - name: Package Linux artifact
+        run: |
+          mkdir -p artifact/lib artifact/include artifact/licenses artifact/build-info
+          cp -a "$PREFIX"/lib/*.so* artifact/lib/
+          cp -a "$PREFIX"/include/mpv artifact/include/
+          cp -a mpv-src/LICENSE.LGPL artifact/licenses/mpv-LICENSE.LGPL
+          cp -a mpv-src/LICENSE.GPL artifact/licenses/mpv-LICENSE.GPL
+          cp -a ffmpeg-src/COPYING.LGPLv2.1 artifact/licenses/ffmpeg-COPYING.LGPLv2.1
+          cp -a ffmpeg-src/COPYING.LGPLv3 artifact/licenses/ffmpeg-COPYING.LGPLv3
+          cp -a libplacebo-src/LICENSE artifact/licenses/libplacebo-LICENSE
+          cp -a libass-src/COPYING artifact/licenses/libass-COPYING
+          {
+            echo "mpv ref: $MPV_REF"
+            echo "ffmpeg ref: $FFMPEG_REF"
+            echo "mpv meson flags: -Dlibmpv=true -Dcplayer=false -Dgpl=false"
+            echo "ffmpeg configure flags: --disable-gpl --disable-nonfree --enable-shared --disable-static"
+          } > artifact/build-info/build-flags.txt
+
+      - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
-          name: libmpv-linux
-          path: |
-            mpv/build/libmpv.so*
-            mpv/libmpv/client.h
+          name: libmpv-linux-x86_64-lgpl
+          path: artifact
 
-  # ==========================================
-  # 2. Windows 平台构建 (MSYS2 / MinGW-w64)
-  # ==========================================
   build-windows:
+    name: Windows x86_64
     runs-on: windows-latest
     steps:
       - name: Setup MSYS2
@@ -57,83 +139,220 @@ jobs:
           msystem: MINGW64
           update: true
           install: >-
+            base-devel
             git
-            mingw-w64-x86_64-toolchain
+            make
+            nasm
+            pactoys
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-fontconfig
+            mingw-w64-x86_64-freetype
+            mingw-w64-x86_64-fribidi
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-harfbuzz
+            mingw-w64-x86_64-libiconv
             mingw-w64-x86_64-meson
             mingw-w64-x86_64-ninja
-            mingw-w64-x86_64-pkg-config
-            mingw-w64-x86_64-vulkan-headers
-            mingw-w64-x86_64-vulkan-loader
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-python
+            mingw-w64-x86_64-zlib
 
-      - name: Build LGPL FFmpeg and libmpv
+      - name: Build LGPL FFmpeg, libplacebo, libass, and libmpv
         shell: msys2 {0}
         run: |
-          # 构建 FFmpeg
-          git clone --depth 1 -b n6.1.1 https://git.ffmpeg.org/ffmpeg.git ffmpeg-src
-          cd ffmpeg-src
-          ./configure --prefix=/mingw64 --enable-shared --disable-static \
-            --disable-gpl --disable-nonfree --disable-doc --disable-programs \
-            --arch=x86_64 --target-os=mingw32 --cross-prefix=x86_64-w64-mingw32-
-          make -j$(nproc)
+          set -euo pipefail
+
+          export PREFIX="$(cygpath -u "$GITHUB_WORKSPACE")/_prefix/windows-x86_64"
+          export PATH="$PREFIX/bin:/mingw64/bin:$PATH"
+          export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:/mingw64/lib/pkgconfig"
+          mkdir -p "$PREFIX"
+
+          git clone --depth 1 --branch "$FFMPEG_REF" "$FFMPEG_REPO" ffmpeg-src
+          pushd ffmpeg-src
+          ./configure \
+            --prefix="$PREFIX" \
+            --libdir="$PREFIX/lib" \
+            --target-os=mingw32 \
+            --arch=x86_64 \
+            --enable-cross-compile \
+            --cross-prefix=x86_64-w64-mingw32- \
+            --enable-shared \
+            --disable-static \
+            --disable-gpl \
+            --disable-nonfree \
+            --disable-doc \
+            --disable-programs \
+            --disable-autodetect \
+            --enable-zlib
+          make -j"$(nproc)"
           make install
-          cd ..
+          popd
 
-          # 构建 mpv
-          git clone https://github.com/mpv-player/mpv.git
-          cd mpv
-          meson setup build -Dlibmpv=true -Dcplayer=false -Dgpl=false -Dvulkan=enabled
-          ninja -C build
+          git clone --depth 1 --recursive --shallow-submodules "$LIBPLACEBO_REPO" libplacebo-src
+          meson setup libplacebo-src/build libplacebo-src \
+            --prefix="$PREFIX" \
+            --libdir=lib \
+            --default-library=shared \
+            -Dvulkan=disabled \
+            -Dopengl=disabled \
+            -Dd3d11=disabled \
+            -Dshaderc=disabled \
+            -Dglslang=disabled \
+            -Dlcms=disabled \
+            -Ddovi=disabled \
+            -Dlibdovi=disabled \
+            -Dxxhash=disabled \
+            -Dunwind=disabled \
+            -Ddemos=false \
+            -Dtests=false
+          meson compile -C libplacebo-src/build
+          meson install -C libplacebo-src/build
 
-      - name: Upload Windows Artifact
+          git clone --depth 1 "$LIBASS_REPO" libass-src
+          meson setup libass-src/build libass-src \
+            --prefix="$PREFIX" \
+            --libdir=lib \
+            --default-library=shared \
+            -Dtest=disabled \
+            -Dcompare=disabled \
+            -Dprofile=disabled \
+            -Dfuzz=disabled \
+            -Dcheckasm=disabled
+          meson compile -C libass-src/build
+          meson install -C libass-src/build
+
+          git clone --depth 1 --branch "$MPV_REF" "$MPV_REPO" mpv-src
+          meson setup mpv-src/build mpv-src \
+            --prefix="$PREFIX" \
+            --libdir=lib \
+            -Dlibmpv=true \
+            -Dcplayer=false \
+            -Dgpl=false \
+            -Dbuild-date=false \
+            -Dlua=disabled \
+            -Djavascript=disabled \
+            -Dmanpage-build=disabled \
+            -Dvulkan=disabled \
+            -Dshaderc=disabled \
+            -Dspirv-cross=disabled
+          meson compile -C mpv-src/build
+          meson install -C mpv-src/build
+
+      - name: Package Windows artifact
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+
+          PREFIX="$(cygpath -u "$GITHUB_WORKSPACE")/_prefix/windows-x86_64"
+          mkdir -p artifact/bin artifact/lib artifact/include artifact/licenses artifact/build-info
+          cp -a "$PREFIX"/bin/*.dll artifact/bin/
+          cp -a "$PREFIX"/lib/*.dll.a artifact/lib/
+          cp -a "$PREFIX"/include/mpv artifact/include/
+
+          while IFS= read -r dll; do
+            [ -n "$dll" ] && cp -n "$dll" artifact/bin/
+          done < <(ldd "$PREFIX/bin/libmpv-2.dll" | awk '/\/mingw64\// {print $3}' | sort -u)
+
+          cp -a mpv-src/LICENSE.LGPL artifact/licenses/mpv-LICENSE.LGPL
+          cp -a mpv-src/LICENSE.GPL artifact/licenses/mpv-LICENSE.GPL
+          cp -a ffmpeg-src/COPYING.LGPLv2.1 artifact/licenses/ffmpeg-COPYING.LGPLv2.1
+          cp -a ffmpeg-src/COPYING.LGPLv3 artifact/licenses/ffmpeg-COPYING.LGPLv3
+          cp -a libplacebo-src/LICENSE artifact/licenses/libplacebo-LICENSE
+          cp -a libass-src/COPYING artifact/licenses/libass-COPYING
+          {
+            echo "mpv ref: $MPV_REF"
+            echo "ffmpeg ref: $FFMPEG_REF"
+            echo "mpv meson flags: -Dlibmpv=true -Dcplayer=false -Dgpl=false"
+            echo "ffmpeg configure flags: --disable-gpl --disable-nonfree --enable-shared --disable-static"
+          } > artifact/build-info/build-flags.txt
+
+      - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: libmpv-windows
-          path: |
-            mpv/build/libmpv-2.dll
-            mpv/build/libmpv.dll.a
-            mpv/libmpv/client.h
+          name: libmpv-windows-x86_64-lgpl
+          path: artifact
 
-  # ==========================================
-  # 3. Android 平台构建 (armv7 & armv8)
-  # ==========================================
   build-android:
+    name: Android ${{ matrix.arch }}
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        arch: [armv7l, arm64] # Android 32位和64位
+        include:
+          - arch: armv7l
+            abi: armeabi-v7a
+          - arch: arm64
+            abi: arm64-v8a
     steps:
-      - name: Setup Android NDK
-        uses: android-actions/setup-android@v3
-
-      - name: Clone mpv-android buildscripts
+      - name: Install host dependencies
         run: |
-          git clone https://github.com/mpv-player/mpv-android.git
-          cd mpv-android/buildscripts
-          ./download.sh
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf automake build-essential ca-certificates cmake default-jdk-headless \
+            gperf git libtool meson nasm ninja-build pkg-config python3 unzip wget
 
-      - name: Patch scripts for LGPL compliance
+      - name: Clone mpv-android build scripts
         run: |
-          cd mpv-android/buildscripts
-          # 1. 修改 FFmpeg 构建脚本，移除 GPL 依赖和标志
-          sed -i 's/--enable-gpl//g' scripts/ffmpeg.sh
-          # 移除 x264 (GPL)
-          sed -i 's/--enable-libx264//g' scripts/ffmpeg.sh
-          sed -i 's/--enable-libx265//g' scripts/ffmpeg.sh
-          sed -i 's/x264//g' scripts/ffmpeg.sh
-          
-          # 2. 修改 mpv 构建脚本，强制声明 LGPL 并且只构建动态库
-          sed -i 's/meson setup/meson setup -Dgpl=false/g' scripts/mpv.sh
+          git clone --depth 1 https://github.com/mpv-android/mpv-android.git mpv-android
 
-      - name: Build Android (${{ matrix.arch }})
+      - name: Download Android SDK, NDK, and sources
         run: |
           cd mpv-android/buildscripts
-          # 执行对应的架构构建
-          ./buildall.sh --arch ${{ matrix.arch }}
+          IN_CI=1 ./download.sh
 
-      - name: Upload Android Artifact
+      - name: Patch Android scripts for LGPL build
+        run: |
+          cd mpv-android/buildscripts
+          python3 - <<'PY'
+          from pathlib import Path
+
+          ffmpeg = Path("scripts/ffmpeg.sh")
+          text = ffmpeg.read_text()
+          text = text.replace("--enable-{gpl,version3}", "--enable-version3")
+          if "--enable-gpl" in text:
+              raise SystemExit("FFmpeg script still contains --enable-gpl")
+          ffmpeg.write_text(text)
+
+          mpv = Path("scripts/mpv.sh")
+          text = mpv.read_text()
+          if "-Dgpl=false" not in text:
+              needle = "-Dlibmpv=true -Dcplayer=false \\\n"
+              if needle not in text:
+                  raise SystemExit("Could not find mpv Meson option block")
+              text = text.replace(
+                  needle,
+                  "-Dlibmpv=true -Dcplayer=false \\\n\t-Dgpl=false \\\n",
+                  1,
+              )
+          mpv.write_text(text)
+          PY
+
+      - name: Build Android libmpv
+        run: |
+          cd mpv-android/buildscripts
+          ./buildall.sh --arch "${{ matrix.arch }}" mpv
+
+      - name: Package Android artifact
+        run: |
+          PREFIX="mpv-android/buildscripts/prefix/${{ matrix.arch }}"
+          mkdir -p artifact/jniLibs/${{ matrix.abi }} artifact/include artifact/licenses artifact/build-info
+          cp -a "$PREFIX/lib/"*.so artifact/jniLibs/${{ matrix.abi }}/
+          cp -a "$PREFIX/include/mpv" artifact/include/
+          cp -a mpv-android/buildscripts/deps/mpv/LICENSE.LGPL artifact/licenses/mpv-LICENSE.LGPL
+          cp -a mpv-android/buildscripts/deps/mpv/LICENSE.GPL artifact/licenses/mpv-LICENSE.GPL
+          cp -a mpv-android/buildscripts/deps/ffmpeg/COPYING.LGPLv2.1 artifact/licenses/ffmpeg-COPYING.LGPLv2.1
+          cp -a mpv-android/buildscripts/deps/ffmpeg/COPYING.LGPLv3 artifact/licenses/ffmpeg-COPYING.LGPLv3
+          cp -a mpv-android/buildscripts/deps/libplacebo/LICENSE artifact/licenses/libplacebo-LICENSE
+          cp -a mpv-android/buildscripts/deps/libass/COPYING artifact/licenses/libass-COPYING
+          {
+            echo "android arch: ${{ matrix.arch }}"
+            echo "android abi: ${{ matrix.abi }}"
+            echo "mpv meson flag added: -Dgpl=false"
+            echo "ffmpeg patch: --enable-{gpl,version3} -> --enable-version3"
+          } > artifact/build-info/build-flags.txt
+
+      - name: Upload Android artifact
         uses: actions/upload-artifact@v4
         with:
-          name: libmpv-android-${{ matrix.arch }}
-          path: |
-            mpv-android/app/src/main/jniLibs/**/libmpv.so
-            mpv-android/buildscripts/deps/mpv/libmpv/client.h
+          name: libmpv-android-${{ matrix.abi }}-lgpl
+          path: artifact
