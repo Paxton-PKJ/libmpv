@@ -1,160 +1,202 @@
-name: Build LGPL libmpv
+name: Build LGPL libmpv (Linux, Windows, Android)
 
 on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
   workflow_dispatch:
     inputs:
       build_linux:
         description: Build Linux x86_64
         required: false
-        default: true
         type: boolean
+        default: true
       build_windows:
         description: Build Windows x86_64
         required: false
-        default: true
         type: boolean
+        default: true
       build_android_armv7:
-        description: Build Android armeabi-v7a
+        description: Build Android ARMv7
         required: false
-        default: true
         type: boolean
+        default: true
       build_android_arm64:
-        description: Build Android arm64-v8a
+        description: Build Android ARM64
         required: false
-        default: true
         type: boolean
+        default: true
+      build_source_bundle:
+        description: Upload source bundle
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
 
 env:
-  MPV_REPO: https://github.com/mpv-player/mpv.git
-  MPV_REF: master
-  FFMPEG_REPO: https://github.com/FFmpeg/FFmpeg.git
-  FFMPEG_REF: n8.1.1
-  LIBPLACEBO_REPO: https://code.videolan.org/videolan/libplacebo.git
-  LIBASS_REPO: https://github.com/libass/libass.git
+  FFMPEG_VERSION: n6.1.1
+  MPV_VERSION: 0.38.0
+  LIBPLACEBO_VERSION: v6.338.2
+  LIBASS_VERSION: 0.17.4
+  VCPKG_REF: b216ddff25a1f432870e6c340ce79357049ef86e
+  NDK_VERSION: r26d
+  API_LEVEL: 21
+  NDK_PATH: /tmp/android-ndk
 
 jobs:
-  build-linux:
-    name: Linux x86_64
-    if: ${{ inputs.build_linux }}
+  linux-x86_64:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_linux }}
     runs-on: ubuntu-latest
-    env:
-      PREFIX: ${{ github.workspace }}/_prefix/linux-x86_64
-      PKG_CONFIG_PATH: ${{ github.workspace }}/_prefix/linux-x86_64/lib/pkgconfig
-      LD_LIBRARY_PATH: ${{ github.workspace }}/_prefix/linux-x86_64/lib
     steps:
-      - name: Install host dependencies
+      - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            autoconf automake build-essential ca-certificates cmake git \
-            libfontconfig1-dev libfreetype-dev libfribidi-dev libgl-dev \
-            libharfbuzz-dev libtool meson nasm ninja-build pkg-config \
-            python3 python3-pip wget zlib1g-dev
+          sudo apt-get install -y \
+            build-essential git meson ninja-build pkg-config \
+            libdrm-dev libegl1-mesa-dev libfontconfig1-dev libfreetype-dev \
+            libfribidi-dev libgl1-mesa-dev libharfbuzz-dev libpulse-dev \
+            libva-dev libvdpau-dev libvulkan-dev \
+            libx11-dev libxext-dev libxinerama-dev libxrandr-dev libxv-dev
 
-      - name: Build LGPL FFmpeg
+      - name: Cache FFmpeg (Linux)
+        id: cache-ffmpeg-linux
+        uses: actions/cache@v4
+        with:
+          path: /tmp/ffmpeg-lgpl-linux
+          key: ffmpeg-lgpl-linux-${{ env.FFMPEG_VERSION }}
+
+      - name: Build FFmpeg (LGPL) for Linux
+        if: steps.cache-ffmpeg-linux.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 --branch "$FFMPEG_REF" "$FFMPEG_REPO" ffmpeg-src
-          cd ffmpeg-src
-          ./configure \
-            --prefix="$PREFIX" \
-            --libdir="$PREFIX/lib" \
-            --enable-shared \
-            --disable-static \
-            --disable-gpl \
-            --disable-nonfree \
-            --disable-doc \
-            --disable-programs \
-            --disable-autodetect \
-            --enable-zlib
+          git clone --depth 1 --branch "${FFMPEG_VERSION}" https://git.ffmpeg.org/ffmpeg.git /tmp/ffmpeg-src-linux
+          cd /tmp/ffmpeg-src-linux
+          ./configure --prefix=/tmp/ffmpeg-lgpl-linux \
+            --disable-gpl --disable-version3 \
+            --enable-shared --disable-static \
+            --disable-doc --disable-programs --disable-outdevs
           make -j"$(nproc)"
           make install
 
-      - name: Build libplacebo
+      - name: Build libass for Linux
         run: |
-          git clone --depth 1 --recursive --shallow-submodules "$LIBPLACEBO_REPO" libplacebo-src
-          meson setup libplacebo-src/build libplacebo-src \
-            --prefix="$PREFIX" \
+          git clone --depth 1 --branch "${LIBASS_VERSION}" https://github.com/libass/libass.git /tmp/libass-src-linux
+          meson setup /tmp/libass-build-linux /tmp/libass-src-linux \
+            --prefix=/tmp/libass-linux \
             --libdir=lib \
-            --default-library=shared \
-            -Dvulkan=disabled \
-            -Dopengl=disabled \
-            -Dd3d11=disabled \
-            -Dshaderc=disabled \
-            -Dglslang=disabled \
-            -Dlcms=disabled \
-            -Ddovi=disabled \
-            -Dlibdovi=disabled \
-            -Dxxhash=disabled \
-            -Dunwind=disabled \
-            -Ddemos=false \
-            -Dtests=false
-          meson compile -C libplacebo-src/build
-          meson install -C libplacebo-src/build
-
-      - name: Build libass
-        run: |
-          git clone --depth 1 "$LIBASS_REPO" libass-src
-          meson setup libass-src/build libass-src \
-            --prefix="$PREFIX" \
-            --libdir=lib \
-            --default-library=shared \
+            -Ddefault_library=shared \
+            -Dasm=disabled \
             -Dtest=disabled \
             -Dcompare=disabled \
             -Dprofile=disabled \
             -Dfuzz=disabled \
             -Dcheckasm=disabled
-          meson compile -C libass-src/build
-          meson install -C libass-src/build
+          ninja -C /tmp/libass-build-linux
+          meson install -C /tmp/libass-build-linux --no-rebuild
 
-      - name: Build LGPL libmpv
+      - name: Build libplacebo for Linux
         run: |
-          git clone --depth 1 --branch "$MPV_REF" "$MPV_REPO" mpv-src
-          meson setup mpv-src/build mpv-src \
-            --prefix="$PREFIX" \
+          git clone --depth 1 --branch "${LIBPLACEBO_VERSION}" https://github.com/haasn/libplacebo.git /tmp/libplacebo-src-linux
+          meson setup /tmp/libplacebo-build-linux /tmp/libplacebo-src-linux \
+            --prefix=/tmp/libplacebo-linux \
             --libdir=lib \
-            -Dlibmpv=true \
-            -Dcplayer=false \
+            -Ddefault_library=shared \
+            -Ddemos=false \
+            -Dtests=false \
+            -Dbench=false \
+            -Dfuzz=false \
+            -Dvulkan=disabled \
+            -Dopengl=enabled \
+            -Dd3d11=disabled \
+            -Dglslang=disabled \
+            -Dshaderc=disabled \
+            -Dlcms=disabled \
+            -Ddovi=disabled \
+            -Dlibdovi=disabled \
+            -Dxxhash=disabled \
+            -Dunwind=disabled
+          ninja -C /tmp/libplacebo-build-linux
+          meson install -C /tmp/libplacebo-build-linux --no-rebuild
+
+      - name: Build libmpv for Linux
+        run: |
+          git clone --depth 1 --branch "v${MPV_VERSION}" https://github.com/mpv-player/mpv.git mpv-src
+          export PKG_CONFIG_PATH="/tmp/ffmpeg-lgpl-linux/lib/pkgconfig:/tmp/libass-linux/lib/pkgconfig:/tmp/libplacebo-linux/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+          meson setup mpv-linux-build mpv-src \
+            --prefix=/tmp/mpv-install-linux \
+            --libdir=lib \
             -Dgpl=false \
-            -Dbuild-date=false \
+            -Dcplayer=false \
+            -Dlibmpv=true \
+            -Ddefault_library=shared \
+            -Dtests=false \
+            -Dmanpage-build=disabled \
+            -Dhtml-build=disabled \
+            -Dpdf-build=disabled \
             -Dlua=disabled \
             -Djavascript=disabled \
-            -Dmanpage-build=disabled \
-            -Dvulkan=disabled \
-            -Dshaderc=disabled \
-            -Dspirv-cross=disabled
-          meson compile -C mpv-src/build
-          meson install -C mpv-src/build
+            -Dlibarchive=disabled \
+            -Ddvdnav=disabled \
+            -Dcdda=disabled \
+            -Drubberband=disabled \
+            -Duchardet=disabled \
+            -Dvulkan=disabled
+          ninja -C mpv-linux-build
+          meson install -C mpv-linux-build --no-rebuild
 
-      - name: Package Linux artifact
+      - name: Print failure diagnostics (Linux)
+        if: failure()
         run: |
-          mkdir -p artifact/lib artifact/include artifact/licenses artifact/build-info
-          cp -a "$PREFIX"/lib/*.so* artifact/lib/
-          cp -a "$PREFIX"/include/mpv artifact/include/
-          cp -a mpv-src/LICENSE.LGPL artifact/licenses/mpv-LICENSE.LGPL
-          cp -a mpv-src/LICENSE.GPL artifact/licenses/mpv-LICENSE.GPL
-          cp -a ffmpeg-src/COPYING.LGPLv2.1 artifact/licenses/ffmpeg-COPYING.LGPLv2.1
-          cp -a ffmpeg-src/COPYING.LGPLv3 artifact/licenses/ffmpeg-COPYING.LGPLv3
-          cp -a libplacebo-src/LICENSE artifact/licenses/libplacebo-LICENSE
-          cp -a libass-src/COPYING artifact/licenses/libass-COPYING
-          {
-            echo "mpv ref: $MPV_REF"
-            echo "ffmpeg ref: $FFMPEG_REF"
-            echo "mpv meson flags: -Dlibmpv=true -Dcplayer=false -Dgpl=false"
-            echo "ffmpeg configure flags: --disable-gpl --disable-nonfree --enable-shared --disable-static"
-          } > artifact/build-info/build-flags.txt
+          echo "::error::Linux build failed. Check this job log and the build-logs-linux-x86_64 artifact."
+          for log in \
+            /tmp/ffmpeg-src-linux/ffbuild/config.log \
+            /tmp/libass-build-linux/meson-logs/meson-log.txt \
+            /tmp/libplacebo-build-linux/meson-logs/meson-log.txt \
+            mpv-linux-build/meson-logs/meson-log.txt
+          do
+            if [ -f "$log" ]; then
+              echo "::group::$log"
+              tail -n 200 "$log"
+              echo "::endgroup::"
+            fi
+          done
 
-      - name: Upload Linux artifact
+      - name: Upload failure logs (Linux)
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: libmpv-linux-x86_64-lgpl
-          path: artifact
+          name: build-logs-linux-x86_64
+          if-no-files-found: ignore
+          path: |
+            /tmp/ffmpeg-src-linux/ffbuild/config.log
+            /tmp/libass-build-linux/meson-logs/
+            /tmp/libplacebo-build-linux/meson-logs/
+            mpv-linux-build/meson-logs/
 
-  build-windows:
-    name: Windows x86_64
-    if: ${{ inputs.build_windows }}
+      - name: Upload artifacts (Linux)
+        uses: actions/upload-artifact@v4
+        with:
+          name: libmpv-lgpl-linux-x86_64
+          path: |
+            /tmp/mpv-install-linux/lib/libmpv.so*
+            /tmp/mpv-install-linux/include/
+            /tmp/ffmpeg-lgpl-linux/lib/*.so*
+            /tmp/libass-linux/lib/*.so*
+            /tmp/libplacebo-linux/lib/*.so*
+
+  windows-x86_64:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_windows }}
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
     steps:
-      - name: Setup MSYS2
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up MSYS2
         uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
@@ -162,229 +204,483 @@ jobs:
           install: >-
             base-devel
             git
-            make
-            nasm
-            pactoys
-            mingw-w64-x86_64-binutils
-            mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-fontconfig
             mingw-w64-x86_64-freetype
             mingw-w64-x86_64-fribidi
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-harfbuzz
-            mingw-w64-x86_64-libiconv
             mingw-w64-x86_64-meson
             mingw-w64-x86_64-ninja
             mingw-w64-x86_64-pkgconf
             mingw-w64-x86_64-python
-            mingw-w64-x86_64-zlib
 
-      - name: Build LGPL FFmpeg, libplacebo, libass, and libmpv
-        shell: msys2 {0}
+      - name: Build FFmpeg (LGPL) for Windows
         run: |
-          set -euo pipefail
-
-          export PREFIX="$(cygpath -u "$GITHUB_WORKSPACE")/_prefix/windows-x86_64"
-          export PATH="$PREFIX/bin:/mingw64/bin:$PATH"
-          export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:/mingw64/lib/pkgconfig"
-          mkdir -p "$PREFIX"
-          command -v gcc
-          command -v ar
-          command -v ranlib
-          command -v nm
-          command -v windres
-
-          git clone --depth 1 --branch "$FFMPEG_REF" "$FFMPEG_REPO" ffmpeg-src
-          pushd ffmpeg-src
-          ./configure \
-            --prefix="$PREFIX" \
-            --libdir="$PREFIX/lib" \
-            --target-os=mingw32 \
-            --arch=x86_64 \
-            --cc=gcc \
-            --cxx=g++ \
-            --ar=ar \
-            --ranlib=ranlib \
-            --nm=nm \
-            --strip=strip \
-            --windres=windres \
-            --pkg-config=pkg-config \
-            --enable-shared \
-            --disable-static \
-            --disable-gpl \
-            --disable-nonfree \
-            --disable-doc \
-            --disable-programs \
-            --disable-autodetect \
-            --enable-zlib
+          WORKDIR="$(cygpath -u "$GITHUB_WORKSPACE")"
+          git clone --depth 1 --branch "${FFMPEG_VERSION}" https://git.ffmpeg.org/ffmpeg.git "$WORKDIR/ffmpeg-src-win64"
+          cd "$WORKDIR/ffmpeg-src-win64"
+          ./configure --prefix="$WORKDIR/ffmpeg-win64" \
+            --arch=x86_64 --target-os=mingw32 \
+            --enable-shared --disable-static \
+            --disable-gpl --disable-version3 \
+            --disable-doc --disable-programs
           make -j"$(nproc)"
           make install
-          popd
 
-          git clone --depth 1 --recursive --shallow-submodules "$LIBPLACEBO_REPO" libplacebo-src
-          meson setup libplacebo-src/build libplacebo-src \
-            --prefix="$PREFIX" \
+      - name: Build libass for Windows
+        run: |
+          WORKDIR="$(cygpath -u "$GITHUB_WORKSPACE")"
+          git clone --depth 1 --branch "${LIBASS_VERSION}" https://github.com/libass/libass.git "$WORKDIR/libass-src-win64"
+          meson setup "$WORKDIR/libass-build-win64" "$WORKDIR/libass-src-win64" \
+            --prefix="$WORKDIR/libass-win64" \
             --libdir=lib \
-            --default-library=shared \
-            -Dvulkan=disabled \
-            -Dopengl=disabled \
-            -Dd3d11=disabled \
-            -Dshaderc=disabled \
-            -Dglslang=disabled \
-            -Dlcms=disabled \
-            -Ddovi=disabled \
-            -Dlibdovi=disabled \
-            -Dxxhash=disabled \
-            -Dunwind=disabled \
-            -Ddemos=false \
-            -Dtests=false
-          meson compile -C libplacebo-src/build
-          meson install -C libplacebo-src/build
-
-          git clone --depth 1 "$LIBASS_REPO" libass-src
-          meson setup libass-src/build libass-src \
-            --prefix="$PREFIX" \
-            --libdir=lib \
-            --default-library=shared \
+            -Ddefault_library=shared \
+            -Dfontconfig=disabled \
+            -Ddirectwrite=enabled \
+            -Dasm=disabled \
             -Dtest=disabled \
             -Dcompare=disabled \
             -Dprofile=disabled \
             -Dfuzz=disabled \
             -Dcheckasm=disabled
-          meson compile -C libass-src/build
-          meson install -C libass-src/build
+          ninja -C "$WORKDIR/libass-build-win64"
+          meson install -C "$WORKDIR/libass-build-win64" --no-rebuild
 
-          git clone --depth 1 --branch "$MPV_REF" "$MPV_REPO" mpv-src
-          meson setup mpv-src/build mpv-src \
-            --prefix="$PREFIX" \
+      - name: Build libplacebo for Windows
+        run: |
+          WORKDIR="$(cygpath -u "$GITHUB_WORKSPACE")"
+          git clone --depth 1 --branch "${LIBPLACEBO_VERSION}" https://github.com/haasn/libplacebo.git "$WORKDIR/libplacebo-src-win64"
+          meson setup "$WORKDIR/libplacebo-build-win64" "$WORKDIR/libplacebo-src-win64" \
+            --prefix="$WORKDIR/libplacebo-win64" \
             --libdir=lib \
-            -Dlibmpv=true \
-            -Dcplayer=false \
+            -Ddefault_library=shared \
+            -Ddemos=false \
+            -Dtests=false \
+            -Dbench=false \
+            -Dfuzz=false \
+            -Dvulkan=disabled \
+            -Dopengl=enabled \
+            -Dd3d11=disabled \
+            -Dglslang=disabled \
+            -Dshaderc=disabled \
+            -Dlcms=disabled \
+            -Ddovi=disabled \
+            -Dlibdovi=disabled \
+            -Dxxhash=disabled \
+            -Dunwind=disabled
+          ninja -C "$WORKDIR/libplacebo-build-win64"
+          meson install -C "$WORKDIR/libplacebo-build-win64" --no-rebuild
+
+      - name: Build libmpv for Windows
+        run: |
+          WORKDIR="$(cygpath -u "$GITHUB_WORKSPACE")"
+          git clone --depth 1 --branch "v${MPV_VERSION}" https://github.com/mpv-player/mpv.git "$WORKDIR/mpv-src-win64"
+          export PKG_CONFIG_PATH="$WORKDIR/ffmpeg-win64/lib/pkgconfig:$WORKDIR/libass-win64/lib/pkgconfig:$WORKDIR/libplacebo-win64/lib/pkgconfig:/mingw64/lib/pkgconfig"
+          meson setup "$WORKDIR/mpv-win64-build" "$WORKDIR/mpv-src-win64" \
+            --prefix="$WORKDIR/mpv-install-win64" \
+            --libdir=lib \
             -Dgpl=false \
-            -Dbuild-date=false \
+            -Dcplayer=false \
+            -Dlibmpv=true \
+            -Ddefault_library=shared \
+            -Dtests=false \
+            -Dmanpage-build=disabled \
+            -Dhtml-build=disabled \
+            -Dpdf-build=disabled \
             -Dlua=disabled \
             -Djavascript=disabled \
-            -Dmanpage-build=disabled \
-            -Dvulkan=disabled \
-            -Dshaderc=disabled \
-            -Dspirv-cross=disabled
-          meson compile -C mpv-src/build
-          meson install -C mpv-src/build
+            -Dlibarchive=disabled \
+            -Ddvdnav=disabled \
+            -Dcdda=disabled \
+            -Drubberband=disabled \
+            -Duchardet=disabled \
+            -Dvulkan=disabled
+          ninja -C "$WORKDIR/mpv-win64-build"
+          meson install -C "$WORKDIR/mpv-win64-build" --no-rebuild
 
-      - name: Package Windows artifact
-        shell: msys2 {0}
+      - name: Collect Windows runtime DLLs
         run: |
-          set -euo pipefail
+          WORKDIR="$(cygpath -u "$GITHUB_WORKSPACE")"
+          mkdir -p "$WORKDIR/artifact-win64/bin"
+          cp "$WORKDIR"/mpv-install-win64/bin/libmpv-*.dll "$WORKDIR/artifact-win64/bin/"
+          cp "$WORKDIR"/ffmpeg-win64/bin/*.dll "$WORKDIR/artifact-win64/bin/"
+          cp "$WORKDIR"/libass-win64/bin/*.dll "$WORKDIR/artifact-win64/bin/"
+          cp "$WORKDIR"/libplacebo-win64/bin/*.dll "$WORKDIR/artifact-win64/bin/"
 
-          PREFIX="$(cygpath -u "$GITHUB_WORKSPACE")/_prefix/windows-x86_64"
-          mkdir -p artifact/bin artifact/lib artifact/include artifact/licenses artifact/build-info
-          cp -a "$PREFIX"/bin/*.dll artifact/bin/
-          cp -a "$PREFIX"/lib/*.dll.a artifact/lib/
-          cp -a "$PREFIX"/include/mpv artifact/include/
+          for dll in "$WORKDIR"/artifact-win64/bin/*.dll; do
+            ldd "$dll" | awk '/\/mingw64\/bin/ {print $3}'
+          done | sort -u | while read -r dep; do
+            [ -n "$dep" ] && cp -n "$dep" "$WORKDIR/artifact-win64/bin/"
+          done
 
-          while IFS= read -r dll; do
-            [ -n "$dll" ] && cp -n "$dll" artifact/bin/
-          done < <(ldd "$PREFIX/bin/libmpv-2.dll" | awk '/\/mingw64\// {print $3}' | sort -u)
+          cp -r "$WORKDIR/mpv-install-win64/include" "$WORKDIR/artifact-win64/"
 
-          cp -a mpv-src/LICENSE.LGPL artifact/licenses/mpv-LICENSE.LGPL
-          cp -a mpv-src/LICENSE.GPL artifact/licenses/mpv-LICENSE.GPL
-          cp -a ffmpeg-src/COPYING.LGPLv2.1 artifact/licenses/ffmpeg-COPYING.LGPLv2.1
-          cp -a ffmpeg-src/COPYING.LGPLv3 artifact/licenses/ffmpeg-COPYING.LGPLv3
-          cp -a libplacebo-src/LICENSE artifact/licenses/libplacebo-LICENSE
-          cp -a libass-src/COPYING artifact/licenses/libass-COPYING
-          {
-            echo "mpv ref: $MPV_REF"
-            echo "ffmpeg ref: $FFMPEG_REF"
-            echo "mpv meson flags: -Dlibmpv=true -Dcplayer=false -Dgpl=false"
-            echo "ffmpeg configure flags: --disable-gpl --disable-nonfree --enable-shared --disable-static"
-          } > artifact/build-info/build-flags.txt
+      - name: Print failure diagnostics (Windows)
+        if: failure()
+        run: |
+          WORKDIR="$(cygpath -u "$GITHUB_WORKSPACE")"
+          echo "::error::Windows build failed. Check this job log and the build-logs-windows-x86_64 artifact."
+          for log in \
+            "$WORKDIR/ffmpeg-src-win64/ffbuild/config.log" \
+            "$WORKDIR/libass-build-win64/meson-logs/meson-log.txt" \
+            "$WORKDIR/libplacebo-build-win64/meson-logs/meson-log.txt" \
+            "$WORKDIR/mpv-win64-build/meson-logs/meson-log.txt"
+          do
+            if [ -f "$log" ]; then
+              echo "::group::$log"
+              tail -n 200 "$log"
+              echo "::endgroup::"
+            fi
+          done
 
-      - name: Upload Windows artifact
+      - name: Upload failure logs (Windows)
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: libmpv-windows-x86_64-lgpl
-          path: artifact
+          name: build-logs-windows-x86_64
+          if-no-files-found: ignore
+          path: |
+            ffmpeg-src-win64/ffbuild/config.log
+            libass-build-win64/meson-logs/
+            libplacebo-build-win64/meson-logs/
+            mpv-win64-build/meson-logs/
 
-  build-android:
-    name: Android ${{ matrix.arch }}
-    if: ${{ inputs.build_android_armv7 || inputs.build_android_arm64 }}
+      - name: Upload artifacts (Windows)
+        uses: actions/upload-artifact@v4
+        with:
+          name: libmpv-lgpl-windows-x86_64
+          path: artifact-win64/
+
+  android:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_android_armv7 || inputs.build_android_arm64 }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(inputs.build_android_armv7 && inputs.build_android_arm64 && '{"include":[{"arch":"armv7l","abi":"armeabi-v7a"},{"arch":"arm64","abi":"arm64-v8a"}]}' || inputs.build_android_armv7 && '{"include":[{"arch":"armv7l","abi":"armeabi-v7a"}]}' || '{"include":[{"arch":"arm64","abi":"arm64-v8a"}]}') }}
+      matrix:
+        include:
+          - arch: armv7
+            clang_prefix: armv7a-linux-androideabi
+            ffmpeg_arch: arm
+            ffmpeg_cpu: armv7-a
+            vcpkg_triplet: arm-neon-android-api21
+            vcpkg_arch: arm
+            vcpkg_host: armv7a-linux-androideabi
+            android_abi: armeabi-v7a
+            android_neon: "ON"
+          - arch: arm64
+            clang_prefix: aarch64-linux-android
+            ffmpeg_arch: aarch64
+            ffmpeg_cpu: armv8-a
+            vcpkg_triplet: arm64-android-api21
+            vcpkg_arch: arm64
+            vcpkg_host: aarch64-linux-android
+            android_abi: arm64-v8a
+            android_neon: ""
     steps:
-      - name: Install host dependencies
+      - name: Check platform selection
+        id: platform
+        run: |
+          selected=false
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            selected=true
+          elif [ "${{ matrix.arch }}" = "armv7" ] && [ "${{ inputs.build_android_armv7 }}" = "true" ]; then
+            selected=true
+          elif [ "${{ matrix.arch }}" = "arm64" ] && [ "${{ inputs.build_android_arm64 }}" = "true" ]; then
+            selected=true
+          fi
+
+          echo "selected=$selected" >> "$GITHUB_OUTPUT"
+          if [ "$selected" != "true" ]; then
+            echo "Skipping Android ${{ matrix.arch }} because it was not selected."
+          fi
+
+      - name: Install build dependencies
+        if: steps.platform.outputs.selected == 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            autoconf automake build-essential ca-certificates cmake default-jdk-headless \
-            gperf git libtool nasm ninja-build pkg-config python3 python3-pip unzip wget
-          python3 -m pip install --user --upgrade --break-system-packages 'meson>=1.11.0'
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          "$HOME/.local/bin/meson" --version
+          sudo apt-get install -y \
+            autoconf automake build-essential curl git libtool meson ninja-build \
+            pkg-config python3 unzip zip
 
-      - name: Clone mpv-android build scripts
+      - name: Cache Android NDK
+        if: steps.platform.outputs.selected == 'true'
+        id: cache-ndk
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NDK_PATH }}
+          key: ndk-${{ env.NDK_VERSION }}
+
+      - name: Download Android NDK
+        if: steps.platform.outputs.selected == 'true' && steps.cache-ndk.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 https://github.com/mpv-android/mpv-android.git mpv-android
+          curl -L -o /tmp/ndk.zip "https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip"
+          unzip -q /tmp/ndk.zip -d /tmp
+          mv /tmp/android-ndk-* "$NDK_PATH"
 
-      - name: Download Android SDK, NDK, and sources
+      - name: Set up Android toolchain
+        if: steps.platform.outputs.selected == 'true'
         run: |
-          cd mpv-android/buildscripts
-          IN_CI=1 ./download.sh
-
-      - name: Patch Android scripts for LGPL build
-        run: |
-          cd mpv-android/buildscripts
-          python3 - <<'PY'
-          from pathlib import Path
-
-          ffmpeg = Path("scripts/ffmpeg.sh")
-          text = ffmpeg.read_text()
-          text = text.replace("--enable-{gpl,version3}", "--enable-version3")
-          if "--enable-gpl" in text:
-              raise SystemExit("FFmpeg script still contains --enable-gpl")
-          ffmpeg.write_text(text)
-
-          mpv = Path("scripts/mpv.sh")
-          text = mpv.read_text()
-          if "-Dgpl=false" not in text:
-              needle = "-Dlibmpv=true -Dcplayer=false \\\n"
-              if needle not in text:
-                  raise SystemExit("Could not find mpv Meson option block")
-              text = text.replace(
-                  needle,
-                  "-Dlibmpv=true -Dcplayer=false \\\n\t-Dgpl=false \\\n",
-                  1,
-              )
-          mpv.write_text(text)
-          PY
-
-      - name: Build Android libmpv
-        run: |
-          cd mpv-android/buildscripts
-          ./buildall.sh --arch "${{ matrix.arch }}" mpv
-
-      - name: Package Android artifact
-        run: |
-          PREFIX="mpv-android/buildscripts/prefix/${{ matrix.arch }}"
-          mkdir -p artifact/jniLibs/${{ matrix.abi }} artifact/include artifact/licenses artifact/build-info
-          cp -a "$PREFIX/lib/"*.so artifact/jniLibs/${{ matrix.abi }}/
-          cp -a "$PREFIX/include/mpv" artifact/include/
-          cp -a mpv-android/buildscripts/deps/mpv/LICENSE.LGPL artifact/licenses/mpv-LICENSE.LGPL
-          cp -a mpv-android/buildscripts/deps/mpv/LICENSE.GPL artifact/licenses/mpv-LICENSE.GPL
-          cp -a mpv-android/buildscripts/deps/ffmpeg/COPYING.LGPLv2.1 artifact/licenses/ffmpeg-COPYING.LGPLv2.1
-          cp -a mpv-android/buildscripts/deps/ffmpeg/COPYING.LGPLv3 artifact/licenses/ffmpeg-COPYING.LGPLv3
-          cp -a mpv-android/buildscripts/deps/libplacebo/LICENSE artifact/licenses/libplacebo-LICENSE
-          cp -a mpv-android/buildscripts/deps/libass/COPYING artifact/licenses/libass-COPYING
+          TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
           {
-            echo "android arch: ${{ matrix.arch }}"
-            echo "android abi: ${{ matrix.abi }}"
-            echo "mpv meson flag added: -Dgpl=false"
-            echo "ffmpeg patch: --enable-{gpl,version3} -> --enable-version3"
-          } > artifact/build-info/build-flags.txt
+            echo "TOOLCHAIN=$TOOLCHAIN"
+            echo "CC_ANDROID=$TOOLCHAIN/bin/${{ matrix.clang_prefix }}${API_LEVEL}-clang"
+            echo "CXX_ANDROID=$TOOLCHAIN/bin/${{ matrix.clang_prefix }}${API_LEVEL}-clang++"
+            echo "AR_ANDROID=$TOOLCHAIN/bin/llvm-ar"
+            echo "RANLIB_ANDROID=$TOOLCHAIN/bin/llvm-ranlib"
+            echo "NM_ANDROID=$TOOLCHAIN/bin/llvm-nm"
+            echo "STRIP_ANDROID=$TOOLCHAIN/bin/llvm-strip"
+            echo "SYSROOT=$TOOLCHAIN/sysroot"
+          } >> "$GITHUB_ENV"
 
-      - name: Upload Android artifact
+      - name: Set up vcpkg triplet for libass
+        if: steps.platform.outputs.selected == 'true'
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git /tmp/vcpkg
+          cd /tmp/vcpkg
+          git checkout "$VCPKG_REF"
+          ./bootstrap-vcpkg.sh
+
+          android_neon_option=""
+          if [ -n "${{ matrix.android_neon }}" ]; then
+            android_neon_option="-DANDROID_ARM_NEON=${{ matrix.android_neon }}"
+          fi
+
+          cat > "triplets/community/${{ matrix.vcpkg_triplet }}.cmake" << EOF
+          set(VCPKG_TARGET_ARCHITECTURE ${{ matrix.vcpkg_arch }})
+          set(VCPKG_CRT_LINKAGE dynamic)
+          set(VCPKG_LIBRARY_LINKAGE static)
+          set(VCPKG_CMAKE_SYSTEM_NAME Android)
+          set(VCPKG_CMAKE_SYSTEM_VERSION ${API_LEVEL})
+          set(VCPKG_MAKE_BUILD_TRIPLET "--host=${{ matrix.vcpkg_host }}")
+          set(VCPKG_CMAKE_CONFIGURE_OPTIONS
+              -DANDROID_ABI=${{ matrix.android_abi }}
+              ${android_neon_option})
+          EOF
+
+      - name: Build libass dependency with vcpkg
+        if: steps.platform.outputs.selected == 'true'
+        run: |
+          export ANDROID_NDK_HOME="$NDK_PATH"
+          export ANDROID_NDK_ROOT="$NDK_PATH"
+          /tmp/vcpkg/vcpkg install "libass:${{ matrix.vcpkg_triplet }}" --clean-after-build
+
+      - name: Cache FFmpeg (Android ${{ matrix.arch }})
+        if: steps.platform.outputs.selected == 'true'
+        id: cache-ffmpeg-android
+        uses: actions/cache@v4
+        with:
+          path: /tmp/ffmpeg-lgpl-android-${{ matrix.arch }}
+          key: ffmpeg-lgpl-android-${{ matrix.arch }}-${{ env.FFMPEG_VERSION }}
+
+      - name: Build FFmpeg (LGPL) for Android ${{ matrix.arch }}
+        if: steps.platform.outputs.selected == 'true' && steps.cache-ffmpeg-android.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "${FFMPEG_VERSION}" https://git.ffmpeg.org/ffmpeg.git "/tmp/ffmpeg-src-android-${{ matrix.arch }}"
+          cd "/tmp/ffmpeg-src-android-${{ matrix.arch }}"
+          ./configure --prefix="/tmp/ffmpeg-lgpl-android-${{ matrix.arch }}" \
+            --enable-shared --disable-static \
+            --disable-gpl --disable-version3 \
+            --disable-doc --disable-programs \
+            --cc="$CC_ANDROID" --cxx="$CXX_ANDROID" \
+            --ar="$AR_ANDROID" --ranlib="$RANLIB_ANDROID" --nm="$NM_ANDROID" --strip="$STRIP_ANDROID" \
+            --target-os=android --arch=${{ matrix.ffmpeg_arch }} --cpu=${{ matrix.ffmpeg_cpu }} \
+            --enable-neon --enable-jni --enable-mediacodec \
+            --sysroot="$SYSROOT"
+          make -j"$(nproc)"
+          make install
+
+      - name: Create Meson cross file for Android ${{ matrix.arch }}
+        if: steps.platform.outputs.selected == 'true'
+        run: |
+          cat > "cross-android-${{ matrix.arch }}.txt" << EOF
+          [binaries]
+          c = '$CC_ANDROID'
+          cpp = '$CXX_ANDROID'
+          ar = '$AR_ANDROID'
+          strip = '$STRIP_ANDROID'
+          pkg-config = 'pkg-config'
+
+          [host_machine]
+          system = 'android'
+          cpu_family = '${{ matrix.ffmpeg_arch }}'
+          cpu = '${{ matrix.ffmpeg_cpu }}'
+          endian = 'little'
+
+          [properties]
+          sys_root = '$SYSROOT'
+          pkg_config_libdir = [
+            '/tmp/ffmpeg-lgpl-android-${{ matrix.arch }}/lib/pkgconfig',
+            '/tmp/libplacebo-android-${{ matrix.arch }}/lib/pkgconfig',
+            '/tmp/vcpkg/installed/${{ matrix.vcpkg_triplet }}/lib/pkgconfig',
+          ]
+          EOF
+
+      - name: Build libplacebo for Android ${{ matrix.arch }}
+        if: steps.platform.outputs.selected == 'true'
+        run: |
+          git clone --depth 1 --branch "${LIBPLACEBO_VERSION}" https://github.com/haasn/libplacebo.git "/tmp/libplacebo-src-android-${{ matrix.arch }}"
+          meson setup "/tmp/libplacebo-build-android-${{ matrix.arch }}" "/tmp/libplacebo-src-android-${{ matrix.arch }}" \
+            --cross-file "cross-android-${{ matrix.arch }}.txt" \
+            --prefix="/tmp/libplacebo-android-${{ matrix.arch }}" \
+            --libdir=lib \
+            -Ddefault_library=shared \
+            -Ddemos=false \
+            -Dtests=false \
+            -Dbench=false \
+            -Dfuzz=false \
+            -Dvulkan=disabled \
+            -Dopengl=enabled \
+            -Dd3d11=disabled \
+            -Dglslang=disabled \
+            -Dshaderc=disabled \
+            -Dlcms=disabled \
+            -Ddovi=disabled \
+            -Dlibdovi=disabled \
+            -Dxxhash=disabled \
+            -Dunwind=disabled
+          ninja -C "/tmp/libplacebo-build-android-${{ matrix.arch }}"
+          meson install -C "/tmp/libplacebo-build-android-${{ matrix.arch }}" --no-rebuild
+
+      - name: Build libmpv for Android ${{ matrix.arch }}
+        if: steps.platform.outputs.selected == 'true'
+        run: |
+          git clone --depth 1 --branch "v${MPV_VERSION}" https://github.com/mpv-player/mpv.git "mpv-src-android-${{ matrix.arch }}"
+          export PKG_CONFIG_LIBDIR="/tmp/ffmpeg-lgpl-android-${{ matrix.arch }}/lib/pkgconfig:/tmp/libplacebo-android-${{ matrix.arch }}/lib/pkgconfig:/tmp/vcpkg/installed/${{ matrix.vcpkg_triplet }}/lib/pkgconfig"
+          meson setup "mpv-build-android-${{ matrix.arch }}" "mpv-src-android-${{ matrix.arch }}" \
+            --cross-file "cross-android-${{ matrix.arch }}.txt" \
+            --prefix="/tmp/mpv-install-android-${{ matrix.arch }}" \
+            --libdir=lib \
+            --prefer-static \
+            -Dgpl=false \
+            -Dcplayer=false \
+            -Dlibmpv=true \
+            -Ddefault_library=shared \
+            -Dtests=false \
+            -Dmanpage-build=disabled \
+            -Dhtml-build=disabled \
+            -Dpdf-build=disabled \
+            -Dlua=disabled \
+            -Djavascript=disabled \
+            -Dlibarchive=disabled \
+            -Ddvdnav=disabled \
+            -Dcdda=disabled \
+            -Drubberband=disabled \
+            -Duchardet=disabled \
+            -Dalsa=disabled \
+            -Dpulse=disabled \
+            -Dx11=disabled \
+            -Dwayland=disabled \
+            -Ddrm=disabled \
+            -Dvulkan=disabled \
+            -Dgl=enabled \
+            -Dplain-gl=enabled \
+            -Degl-android=enabled \
+            -Dandroid-media-ndk=enabled
+          ninja -C "mpv-build-android-${{ matrix.arch }}"
+          meson install -C "mpv-build-android-${{ matrix.arch }}" --no-rebuild
+
+      - name: Print failure diagnostics (Android ${{ matrix.arch }})
+        if: failure() && steps.platform.outputs.selected == 'true'
+        run: |
+          echo "::error::Android ${{ matrix.arch }} build failed. Check this job log and the build-logs-android-${{ matrix.arch }} artifact."
+          for log in \
+            "/tmp/ffmpeg-src-android-${{ matrix.arch }}/ffbuild/config.log" \
+            "/tmp/libplacebo-build-android-${{ matrix.arch }}/meson-logs/meson-log.txt" \
+            "mpv-build-android-${{ matrix.arch }}/meson-logs/meson-log.txt"
+          do
+            if [ -f "$log" ]; then
+              echo "::group::$log"
+              tail -n 200 "$log"
+              echo "::endgroup::"
+            fi
+          done
+
+          if [ -d /tmp/vcpkg/buildtrees ]; then
+            find /tmp/vcpkg/buildtrees -type f \( -name '*.log' -o -name '*.err' -o -name 'config.log' \) -print | head -n 20
+          fi
+
+      - name: Upload failure logs (Android ${{ matrix.arch }})
+        if: failure() && steps.platform.outputs.selected == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: libmpv-android-${{ matrix.abi }}-lgpl
-          path: artifact
+          name: build-logs-android-${{ matrix.arch }}
+          if-no-files-found: ignore
+          path: |
+            /tmp/ffmpeg-src-android-${{ matrix.arch }}/ffbuild/config.log
+            /tmp/libplacebo-build-android-${{ matrix.arch }}/meson-logs/
+            /tmp/vcpkg/buildtrees/**/*.log
+            /tmp/vcpkg/buildtrees/**/*.err
+            /tmp/vcpkg/buildtrees/**/config.log
+            mpv-build-android-${{ matrix.arch }}/meson-logs/
+            cross-android-${{ matrix.arch }}.txt
+
+      - name: Upload artifacts (Android ${{ matrix.arch }})
+        if: steps.platform.outputs.selected == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: libmpv-lgpl-android-${{ matrix.arch }}
+          path: |
+            /tmp/mpv-install-android-${{ matrix.arch }}/lib/libmpv.so
+            /tmp/mpv-install-android-${{ matrix.arch }}/include/
+            /tmp/ffmpeg-lgpl-android-${{ matrix.arch }}/lib/*.so
+            /tmp/libplacebo-android-${{ matrix.arch }}/lib/*.so
+
+  source-bundle:
+    needs: [linux-x86_64, windows-x86_64, android]
+    if: ${{ always() && !cancelled() && !contains(needs.*.result, 'failure') && (github.event_name != 'workflow_dispatch' || inputs.build_source_bundle) }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Collect source code and build metadata
+        run: |
+          mkdir -p source-bundle
+
+          git clone --depth 1 --branch "${FFMPEG_VERSION}" https://git.ffmpeg.org/ffmpeg.git source-bundle/ffmpeg-src
+          git clone --depth 1 --branch "v${MPV_VERSION}" https://github.com/mpv-player/mpv.git source-bundle/mpv-src
+          git clone --depth 1 --branch "${LIBPLACEBO_VERSION}" https://github.com/haasn/libplacebo.git source-bundle/libplacebo-src
+          git clone --depth 1 --branch "${LIBASS_VERSION}" https://github.com/libass/libass.git source-bundle/libass-src
+          git clone https://github.com/microsoft/vcpkg.git source-bundle/vcpkg-src
+          cd source-bundle/vcpkg-src
+          git checkout "$VCPKG_REF"
+          cd ../..
+
+          workflow_file=""
+          for candidate in \
+            .github/workflows/build-libmpv.yaml \
+            .github/workflows/build-libmpv.yml \
+            build-libmpv.yaml \
+            build-libmpv.yml
+          do
+            if [ -f "$candidate" ]; then
+              workflow_file="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "$workflow_file" ]; then
+            echo "Cannot find build workflow file" >&2
+            exit 1
+          fi
+
+          cp "$workflow_file" source-bundle/
+          cat > source-bundle/README.txt << EOF
+          This bundle contains the primary sources and build metadata used by the workflow.
+
+          Versions:
+          - FFmpeg: ${FFMPEG_VERSION}
+          - mpv: ${MPV_VERSION}
+          - libplacebo: ${LIBPLACEBO_VERSION}
+          - libass: ${LIBASS_VERSION}
+          - vcpkg: ${VCPKG_REF}
+
+          FFmpeg is configured with --disable-gpl --disable-version3.
+          mpv is configured with -Dgpl=false and -Dlibmpv=true.
+          Android libass and its transitive dependencies are built through the pinned vcpkg tree included here.
+          EOF
+
+      - name: Upload source bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-code-lgpl
+          path: source-bundle/
