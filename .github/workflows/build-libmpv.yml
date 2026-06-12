@@ -696,7 +696,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/vcpkg
-          key: vcpkg-tree-${{ matrix.vcpkg_triplet }}-${{ env.VCPKG_REF }}-${{ env.API_LEVEL }}-libass-gnutls
+          key: vcpkg-tree-${{ matrix.vcpkg_triplet }}-${{ env.VCPKG_REF }}-${{ env.API_LEVEL }}-libass-gnutls-crau
 
       - name: Set up vcpkg triplet for Android dependencies
         if: steps.platform.outputs.selected == 'true'
@@ -720,6 +720,42 @@ jobs:
             ./bootstrap-vcpkg.sh -disableMetrics
           fi
 
+          python3 - <<'PY'
+          from pathlib import Path
+
+          portfile = Path("ports/libgnutls/portfile.cmake")
+          text = portfile.read_text()
+          marker = "vcpkg_list(SET options)\n"
+          patch = r'''
+          # GnuTLS 3.8.12 leaves CRAU_MAYBE_UNUSED undefined with Android clang:
+          # __has_c_attribute exists, but __maybe_unused__ is not available.
+          file(READ "${SOURCE_PATH}/lib/crau/crau.h" _crau_h)
+          string(REPLACE
+          [=[#   if defined(__has_c_attribute)
+          #    if __has_c_attribute (__maybe_unused__)
+          #     define CRAU_MAYBE_UNUSED [[__maybe_unused__]]
+          #    endif
+          #   elif defined(__GNUC__)
+          #    define CRAU_MAYBE_UNUSED __attribute__((__unused__))
+          #   endif]=]
+          [=[#   if defined(__has_c_attribute)
+          #    if __has_c_attribute (__maybe_unused__)
+          #     define CRAU_MAYBE_UNUSED [[__maybe_unused__]]
+          #    endif
+          #   endif
+          #   if !defined(CRAU_MAYBE_UNUSED) && defined(__GNUC__)
+          #    define CRAU_MAYBE_UNUSED __attribute__((__unused__))
+          #   endif]=]
+          _crau_h "${_crau_h}")
+          file(WRITE "${SOURCE_PATH}/lib/crau/crau.h" "${_crau_h}")
+
+          '''
+          if patch not in text:
+              if marker not in text:
+                  raise SystemExit(f"Cannot find insertion marker in {portfile}")
+              portfile.write_text(text.replace(marker, patch + marker))
+          PY
+
           android_neon_option=""
           if [ -n "${{ matrix.android_neon }}" ]; then
             android_neon_option="-DANDROID_ARM_NEON=${{ matrix.android_neon }}"
@@ -742,7 +778,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/vcpkg-binary-cache
-          key: vcpkg-binary-${{ matrix.vcpkg_triplet }}-${{ env.VCPKG_REF }}-${{ env.API_LEVEL }}-libass-gnutls
+          key: vcpkg-binary-${{ matrix.vcpkg_triplet }}-${{ env.VCPKG_REF }}-${{ env.API_LEVEL }}-libass-gnutls-crau
           restore-keys: |
             vcpkg-binary-${{ matrix.vcpkg_triplet }}-${{ env.VCPKG_REF }}-
 
