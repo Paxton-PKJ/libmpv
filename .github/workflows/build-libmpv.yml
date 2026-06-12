@@ -171,6 +171,15 @@ jobs:
           name: source-code-lgpl
           path: ${{ runner.temp }}/source-code-lgpl
 
+      - name: Restore source executable bits
+        run: |
+          find "$RUNNER_TEMP/source-code-lgpl" -type f \( \
+            -name configure -o \
+            -name '*.sh' -o \
+            -name '*.pl' -o \
+            -name '*.py' \
+          \) -exec chmod +x {} +
+
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -350,6 +359,16 @@ jobs:
           name: source-code-lgpl
           path: ${{ github.workspace }}/source-code-lgpl
 
+      - name: Restore source executable bits
+        run: |
+          WORKDIR="$(cygpath -u "$GITHUB_WORKSPACE")"
+          find "$WORKDIR/source-code-lgpl" -type f \( \
+            -name configure -o \
+            -name '*.sh' -o \
+            -name '*.pl' -o \
+            -name '*.py' \
+          \) -exec chmod +x {} +
+
       - name: Build FFmpeg (LGPL) for Windows
         run: |
           WORKDIR="$(cygpath -u "$GITHUB_WORKSPACE")"
@@ -359,7 +378,10 @@ jobs:
             --arch=x86_64 --target-os=mingw32 \
             --enable-shared --disable-static \
             --disable-gpl --disable-version3 \
-            --disable-doc --disable-programs
+            --disable-doc --disable-programs \
+            --disable-vulkan \
+            --disable-cuda-llvm --disable-cuvid \
+            --disable-ffnvcodec --disable-nvdec --disable-nvenc
           make -j"$(nproc)"
           make install
 
@@ -538,6 +560,15 @@ jobs:
           name: source-code-lgpl
           path: ${{ runner.temp }}/source-code-lgpl
 
+      - name: Restore source executable bits
+        run: |
+          find "$RUNNER_TEMP/source-code-lgpl" -type f \( \
+            -name configure -o \
+            -name '*.sh' -o \
+            -name '*.pl' -o \
+            -name '*.py' \
+          \) -exec chmod +x {} +
+
       - name: Set Android workspace paths
         run: |
           echo "NDK_PATH=$RUNNER_TEMP/android-ndk" >> "$GITHUB_ENV"
@@ -602,6 +633,14 @@ jobs:
           name: vcpkg-src
           path: ${{ runner.temp }}/vcpkg-src
 
+      - name: Restore vcpkg executable bits
+        if: steps.platform.outputs.selected == 'true'
+        run: |
+          find "$RUNNER_TEMP/vcpkg-src" -type f \( \
+            -name '*.sh' -o \
+            -name '*.py' \
+          \) -exec chmod +x {} +
+
       - name: Cache vcpkg tree
         if: steps.platform.outputs.selected == 'true'
         id: cache-vcpkg-tree
@@ -624,6 +663,10 @@ jobs:
           cd "$RUNNER_TEMP/vcpkg"
           # Ensure the vcpkg root marker exists even if the artifact dropped dotfiles.
           touch .vcpkg-root
+          find . -type f \( \
+            -name '*.sh' -o \
+            -name '*.py' \
+          \) -exec chmod +x {} +
           if [ ! -x ./vcpkg ]; then
             ./bootstrap-vcpkg.sh -disableMetrics
           fi
