@@ -138,7 +138,7 @@ jobs:
 
           FFmpeg is configured with --disable-gpl --disable-version3.
           mpv is configured with -Dgpl=false and -Dlibmpv=true.
-          Windows renders via libplacebo with Vulkan + Direct3D 11; Linux and Android render via OpenGL / OpenGL ES.
+          Windows renders via libplacebo with Vulkan; Linux and Android render via OpenGL / OpenGL ES.
           Android libass and its dependencies are built with the pinned vcpkg tree (shipped as the separate vcpkg-src artifact).
           EOF
 
@@ -348,7 +348,6 @@ jobs:
           install: >-
             base-devel
             git
-            mingw-w64-x86_64-cmake
             mingw-w64-x86_64-freetype
             mingw-w64-x86_64-fribidi
             mingw-w64-x86_64-gcc
@@ -359,7 +358,6 @@ jobs:
             mingw-w64-x86_64-pkgconf
             mingw-w64-x86_64-python
             mingw-w64-x86_64-shaderc
-            mingw-w64-x86_64-spirv-cross
             mingw-w64-x86_64-vulkan-headers
             mingw-w64-x86_64-vulkan-loader
 
@@ -418,7 +416,6 @@ jobs:
         run: |
           WORKDIR="$(cygpath -u "$GITHUB_WORKSPACE")"
           cp -a "$WORKDIR/source-code-lgpl/libplacebo-src" "$WORKDIR/libplacebo-src-win64"
-          pkg-config --modversion spirv-cross-c-shared
           meson setup "$WORKDIR/libplacebo-build-win64" "$WORKDIR/libplacebo-src-win64" \
             --prefix="$WORKDIR/libplacebo-win64" \
             --libdir=lib \
@@ -430,7 +427,7 @@ jobs:
             -Dvulkan=enabled \
             -Dvk-proc-addr=enabled \
             -Dopengl=enabled \
-            -Dd3d11=enabled \
+            -Dd3d11=disabled \
             -Dglslang=disabled \
             -Dshaderc=enabled \
             -Dlcms=disabled \
@@ -438,7 +435,8 @@ jobs:
             -Dlibdovi=disabled \
             -Dxxhash=disabled \
             -Dunwind=disabled
-          ninja -C "$WORKDIR/libplacebo-build-win64"
+          set -o pipefail
+          ninja -C "$WORKDIR/libplacebo-build-win64" 2>&1 | tee "$WORKDIR/libplacebo-build-win64/ninja.log"
           meson install -C "$WORKDIR/libplacebo-build-win64" --no-rebuild
 
       - name: Build libmpv for Windows
@@ -511,6 +509,7 @@ jobs:
             "$WORKDIR/ffmpeg-src-win64/ffbuild/config.log" \
             "$WORKDIR/libass-build-win64/meson-logs/meson-log.txt" \
             "$WORKDIR/libplacebo-build-win64/meson-logs/meson-log.txt" \
+            "$WORKDIR/libplacebo-build-win64/ninja.log" \
             "$WORKDIR/mpv-win64-build/meson-logs/meson-log.txt"
           do
             if [ -f "$log" ]; then
@@ -530,6 +529,7 @@ jobs:
             ffmpeg-src-win64/ffbuild/config.log
             libass-build-win64/meson-logs/
             libplacebo-build-win64/meson-logs/
+            libplacebo-build-win64/ninja.log
             mpv-win64-build/meson-logs/
 
       - name: Upload artifacts (Windows)
@@ -776,7 +776,7 @@ jobs:
           pkg_config_libdir = [
             '${{ runner.temp }}/ffmpeg-lgpl-android-${{ matrix.arch }}/lib/pkgconfig',
             '${{ runner.temp }}/libplacebo-android-${{ matrix.arch }}/lib/pkgconfig',
-            '${{ runner.temp }}/vcpkg/installed/${{ matrix.vcpkg_triplet }}/lib/pkgconfig',
+            '${{ runner.temp }}/vcpkg/installed/${{ matrix.vcpkg_triplet }}/lib/pkgconfig'
           ]
           EOF
 
