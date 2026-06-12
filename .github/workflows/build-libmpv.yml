@@ -632,7 +632,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            autoconf automake build-essential curl git libtool ninja-build \
+            autoconf autoconf-archive automake build-essential curl git libtool ninja-build \
             pkg-config python3 python3-venv unzip zip
 
       - name: Install Meson from PyPI
