@@ -85,7 +85,8 @@ jobs:
       - name: Fetch source trees
         run: |
           SOURCE_BUNDLE="$RUNNER_TEMP/source-code-lgpl"
-          mkdir -p "$SOURCE_BUNDLE"
+          VCPKG_BUNDLE="$RUNNER_TEMP/vcpkg-src"
+          mkdir -p "$SOURCE_BUNDLE" "$VCPKG_BUNDLE"
 
           git clone --depth 1 --branch "${FFMPEG_VERSION}" https://git.ffmpeg.org/ffmpeg.git "$SOURCE_BUNDLE/ffmpeg-src"
           git clone --depth 1 --branch "v${MPV_VERSION}" https://github.com/mpv-player/mpv.git "$SOURCE_BUNDLE/mpv-src"
@@ -95,10 +96,11 @@ jobs:
             --branch "${LIBPLACEBO_VERSION}" https://github.com/haasn/libplacebo.git "$SOURCE_BUNDLE/libplacebo-src"
           git clone --depth 1 --branch "${LIBASS_VERSION}" https://github.com/libass/libass.git "$SOURCE_BUNDLE/libass-src"
 
-          # Shallow-fetch vcpkg at the pinned ref so the bundled .git stays small
-          # while still allowing `git checkout "$VCPKG_REF"` in the Android job.
-          git init -q "$SOURCE_BUNDLE/vcpkg-src"
-          cd "$SOURCE_BUNDLE/vcpkg-src"
+          # vcpkg goes into its own artifact (Android-only). Windows/Linux never download
+          # it, which avoids extracting vcpkg's huge / Windows-incompatible tree on the
+          # Windows runner (the cause of the artifact download/extract failure there).
+          git init -q "$VCPKG_BUNDLE/vcpkg"
+          cd "$VCPKG_BUNDLE/vcpkg"
           git remote add origin https://github.com/microsoft/vcpkg.git
           git fetch --depth 1 origin "$VCPKG_REF"
           git checkout -q FETCH_HEAD
@@ -136,18 +138,27 @@ jobs:
 
           FFmpeg is configured with --disable-gpl --disable-version3.
           mpv is configured with -Dgpl=false and -Dlibmpv=true.
-          Vulkan is enabled for libplacebo/mpv where the platform toolchain provides Vulkan headers and loader libraries.
-          Android libass and its transitive dependencies are built through the pinned vcpkg tree included here.
+          Windows renders via libplacebo with Vulkan + Direct3D 11; Linux and Android render via OpenGL / OpenGL ES.
+          Android libass and its dependencies are built with the pinned vcpkg tree (shipped as the separate vcpkg-src artifact).
           EOF
 
       - name: Upload source bundle
         uses: actions/upload-artifact@v4
         with:
           name: source-code-lgpl
-          # upload-artifact v4 excludes dotfiles by default, which would strip the
-          # .git dirs and break `git checkout` / version detection in later jobs.
-          include-hidden-files: true
+          # Default (hidden files excluded) drops the per-repo .git dirs, keeping the
+          # artifact small and free of Windows-incompatible paths. Submodule *contents*
+          # (e.g. libplacebo 3rdparty) are normal files and are still included.
           path: ${{ runner.temp }}/source-code-lgpl/
+
+      - name: Upload vcpkg source (Android only)
+        uses: actions/upload-artifact@v4
+        with:
+          name: vcpkg-src
+          # Keep hidden files so .vcpkg-root (and .git) survive. Only the Android job
+          # (which runs on Linux) downloads this, so Windows path issues never arise.
+          include-hidden-files: true
+          path: ${{ runner.temp }}/vcpkg-src/
 
   linux-x86_64:
     needs: prepare-sources
@@ -167,8 +178,7 @@ jobs:
             build-essential git meson ninja-build pkg-config nasm \
             libdrm-dev libegl1-mesa-dev libfontconfig1-dev libfreetype-dev \
             libfribidi-dev libgl1-mesa-dev libharfbuzz-dev libpulse-dev \
-            libshaderc-dev \
-            libva-dev libvdpau-dev libvulkan-dev \
+            libva-dev libvdpau-dev \
             libx11-dev libxext-dev libxinerama-dev libxrandr-dev libxv-dev
 
       - name: Cache FFmpeg (Linux)
@@ -222,12 +232,12 @@ jobs:
             -Dtests=false \
             -Dbench=false \
             -Dfuzz=false \
-            -Dvulkan=enabled \
-            -Dvk-proc-addr=enabled \
+            -Dvulkan=disabled \
+            -Dvk-proc-addr=disabled \
             -Dopengl=enabled \
             -Dd3d11=disabled \
             -Dglslang=disabled \
-            -Dshaderc=enabled \
+            -Dshaderc=disabled \
             -Dlcms=disabled \
             -Ddovi=disabled \
             -Dlibdovi=disabled \
@@ -258,7 +268,7 @@ jobs:
             -Dcdda=disabled \
             -Drubberband=disabled \
             -Duchardet=disabled \
-            -Dvulkan=enabled
+            -Dvulkan=disabled
           ninja -C "$RUNNER_TEMP/mpv-linux-build"
           meson install -C "$RUNNER_TEMP/mpv-linux-build" --no-rebuild
 
@@ -313,12 +323,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download source bundle
-        uses: actions/download-artifact@v4
-        with:
-          name: source-code-lgpl
-          path: ${{ github.workspace }}/source-code-lgpl
-
       - name: Set up MSYS2
         uses: msys2/setup-msys2@v2
         with:
@@ -339,6 +343,12 @@ jobs:
             mingw-w64-x86_64-shaderc
             mingw-w64-x86_64-vulkan-headers
             mingw-w64-x86_64-vulkan-loader
+
+      - name: Download source bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: source-code-lgpl
+          path: ${{ github.workspace }}/source-code-lgpl
 
       - name: Build FFmpeg (LGPL) for Windows
         run: |
@@ -585,6 +595,13 @@ jobs:
             echo "SYSROOT=$TOOLCHAIN/sysroot"
           } >> "$GITHUB_ENV"
 
+      - name: Download vcpkg source
+        if: steps.platform.outputs.selected == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: vcpkg-src
+          path: ${{ runner.temp }}/vcpkg-src
+
       - name: Cache vcpkg tree
         if: steps.platform.outputs.selected == 'true'
         id: cache-vcpkg-tree
@@ -596,14 +613,19 @@ jobs:
       - name: Set up vcpkg triplet for libass
         if: steps.platform.outputs.selected == 'true'
         run: |
-          if [ ! -d "$RUNNER_TEMP/vcpkg/.git" ]; then
-            cp -a "$RUNNER_TEMP/source-code-lgpl/vcpkg-src" "$RUNNER_TEMP/vcpkg"
+          # On a cache miss, populate vcpkg from the downloaded source tree. It is
+          # already at the pinned ref (checked out in prepare-sources), so classic-mode
+          # `vcpkg install` needs no git here.
+          if [ ! -f "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" ]; then
+            rm -rf "$RUNNER_TEMP/vcpkg"
+            cp -a "$RUNNER_TEMP/vcpkg-src/vcpkg" "$RUNNER_TEMP/vcpkg"
           fi
 
           cd "$RUNNER_TEMP/vcpkg"
-          git checkout "$VCPKG_REF"
+          # Ensure the vcpkg root marker exists even if the artifact dropped dotfiles.
+          touch .vcpkg-root
           if [ ! -x ./vcpkg ]; then
-            ./bootstrap-vcpkg.sh
+            ./bootstrap-vcpkg.sh -disableMetrics
           fi
 
           android_neon_option=""
