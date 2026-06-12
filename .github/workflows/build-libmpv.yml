@@ -94,6 +94,19 @@ jobs:
           # --recurse-submodules the meson configure step fails to find them.
           git clone --depth 1 --recurse-submodules --shallow-submodules \
             --branch "${LIBPLACEBO_VERSION}" https://github.com/haasn/libplacebo.git "$SOURCE_BUNDLE/libplacebo-src"
+          LIBPLACEBO_SRC="$SOURCE_BUNDLE/libplacebo-src" python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          script = Path(os.environ["LIBPLACEBO_SRC"]) / "src/vulkan/utils_gen.py"
+          text = script.read_text()
+          old = "registry = VkXML(ET.parse(xmlfile))"
+          new = "registry = VkXML(ET.parse(xmlfile).getroot())"
+          if old in text:
+              script.write_text(text.replace(old, new))
+          else:
+              print("libplacebo utils_gen.py Python 3.14 patch not needed")
+          PY
           git clone --depth 1 --branch "${LIBASS_VERSION}" https://github.com/libass/libass.git "$SOURCE_BUNDLE/libass-src"
 
           # vcpkg goes into its own artifact (Android-only). Windows/Linux never download
@@ -139,6 +152,7 @@ jobs:
           FFmpeg is configured with --disable-gpl --disable-version3.
           mpv is configured with -Dgpl=false and -Dlibmpv=true.
           Windows renders via libplacebo with Vulkan; Linux and Android render via OpenGL / OpenGL ES.
+          libplacebo includes a Python 3.14 compatibility patch for src/vulkan/utils_gen.py.
           Android libass and its dependencies are built with the pinned vcpkg tree (shipped as the separate vcpkg-src artifact).
           EOF
 
@@ -773,11 +787,7 @@ jobs:
           endian = 'little'
 
           [properties]
-          pkg_config_libdir = [
-            '${{ runner.temp }}/ffmpeg-lgpl-android-${{ matrix.arch }}/lib/pkgconfig',
-            '${{ runner.temp }}/libplacebo-android-${{ matrix.arch }}/lib/pkgconfig',
-            '${{ runner.temp }}/vcpkg/installed/${{ matrix.vcpkg_triplet }}/lib/pkgconfig'
-          ]
+          pkg_config_libdir = '${{ runner.temp }}/ffmpeg-lgpl-android-${{ matrix.arch }}/lib/pkgconfig:${{ runner.temp }}/libplacebo-android-${{ matrix.arch }}/lib/pkgconfig:${{ runner.temp }}/vcpkg/installed/${{ matrix.vcpkg_triplet }}/lib/pkgconfig'
           EOF
 
       - name: Build libplacebo for Android ${{ matrix.arch }}
