@@ -1,0 +1,139 @@
+name: Build LGPL libmpv
+
+on:
+  workflow_dispatch: # 允许手动触发
+  push:
+    branches: [ main ]
+
+jobs:
+  # ==========================================
+  # 1. Linux 平台构建 (Ubuntu)
+  # ==========================================
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git build-essential meson ninja-build pkg-config \
+            libssl-dev libasound2-dev libvdpau-dev libva-dev libpulse-dev
+          
+      - name: Build LGPL FFmpeg
+        run: |
+          git clone --depth 1 -b n6.1.1 https://git.ffmpeg.org/ffmpeg.git ffmpeg-src
+          cd ffmpeg-src
+          # 关键：不含 --enable-gpl
+          ./configure --prefix=/usr/local --enable-shared --disable-static \
+            --disable-gpl --disable-nonfree --disable-doc --disable-programs
+          make -j$(nproc)
+          sudo make install
+          sudo ldconfig
+
+      - name: Build LGPL libmpv
+        run: |
+          git clone https://github.com/mpv-player/mpv.git
+          cd mpv
+          # 关键：-Dgpl=false 确保 mpv 本身是 LGPL
+          meson setup build -Dlibmpv=true -Dcplayer=false -Dgpl=false
+          ninja -C build
+
+      - name: Upload Linux Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libmpv-linux
+          path: |
+            mpv/build/libmpv.so*
+            mpv/libmpv/client.h
+
+  # ==========================================
+  # 2. Windows 平台构建 (MSYS2 / MinGW-w64)
+  # ==========================================
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            git
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-meson
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-pkg-config
+            mingw-w64-x86_64-vulkan-headers
+            mingw-w64-x86_64-vulkan-loader
+
+      - name: Build LGPL FFmpeg and libmpv
+        shell: msys2 {0}
+        run: |
+          # 构建 FFmpeg
+          git clone --depth 1 -b n6.1.1 https://git.ffmpeg.org/ffmpeg.git ffmpeg-src
+          cd ffmpeg-src
+          ./configure --prefix=/mingw64 --enable-shared --disable-static \
+            --disable-gpl --disable-nonfree --disable-doc --disable-programs \
+            --arch=x86_64 --target-os=mingw32 --cross-prefix=x86_64-w64-mingw32-
+          make -j$(nproc)
+          make install
+          cd ..
+
+          # 构建 mpv
+          git clone https://github.com/mpv-player/mpv.git
+          cd mpv
+          meson setup build -Dlibmpv=true -Dcplayer=false -Dgpl=false -Dvulkan=enabled
+          ninja -C build
+
+      - name: Upload Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libmpv-windows
+          path: |
+            mpv/build/libmpv-2.dll
+            mpv/build/libmpv.dll.a
+            mpv/libmpv/client.h
+
+  # ==========================================
+  # 3. Android 平台构建 (armv7 & armv8)
+  # ==========================================
+  build-android:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [armv7l, arm64] # Android 32位和64位
+    steps:
+      - name: Setup Android NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Clone mpv-android buildscripts
+        run: |
+          git clone https://github.com/mpv-player/mpv-android.git
+          cd mpv-android/buildscripts
+          ./download.sh
+
+      - name: Patch scripts for LGPL compliance
+        run: |
+          cd mpv-android/buildscripts
+          # 1. 修改 FFmpeg 构建脚本，移除 GPL 依赖和标志
+          sed -i 's/--enable-gpl//g' scripts/ffmpeg.sh
+          # 移除 x264 (GPL)
+          sed -i 's/--enable-libx264//g' scripts/ffmpeg.sh
+          sed -i 's/--enable-libx265//g' scripts/ffmpeg.sh
+          sed -i 's/x264//g' scripts/ffmpeg.sh
+          
+          # 2. 修改 mpv 构建脚本，强制声明 LGPL 并且只构建动态库
+          sed -i 's/meson setup/meson setup -Dgpl=false/g' scripts/mpv.sh
+
+      - name: Build Android (${{ matrix.arch }})
+        run: |
+          cd mpv-android/buildscripts
+          # 执行对应的架构构建
+          ./buildall.sh --arch ${{ matrix.arch }}
+
+      - name: Upload Android Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libmpv-android-${{ matrix.arch }}
+          path: |
+            mpv-android/app/src/main/jniLibs/**/libmpv.so
+            mpv-android/buildscripts/deps/mpv/libmpv/client.h
