@@ -32,7 +32,7 @@ on:
         description: mpv version without leading v
         required: false
         type: string
-        default: 0.38.0
+        default: 0.41.0
       libplacebo_version:
         description: libplacebo git tag
         required: false
@@ -178,7 +178,7 @@ jobs:
   linux-x86_64:
     needs: prepare-sources
     if: ${{ inputs.build_linux }}
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - name: Download source bundle
         uses: actions/download-artifact@v4
@@ -200,7 +200,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             build-essential git ninja-build pkg-config nasm python3-venv \
-            libdrm-dev libegl1-mesa-dev libfontconfig1-dev libfreetype-dev \
+            libdisplay-info-dev libdrm-dev libegl1-mesa-dev libfontconfig1-dev libfreetype-dev \
+            libgbm-dev \
             libfribidi-dev libgl1-mesa-dev libharfbuzz-dev libpulse-dev \
             libgnutls28-dev libva-dev libvdpau-dev \
             libx11-dev libxext-dev libxinerama-dev libxrandr-dev libxv-dev
@@ -218,7 +219,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/ffmpeg-lgpl-linux
-          key: ffmpeg-lgpl-linux-${{ env.FFMPEG_VERSION }}-r2
+          key: ffmpeg-lgpl-linux-${{ env.FFMPEG_VERSION }}-ubuntu24-r1
 
       - name: Build FFmpeg (LGPL) for Linux
         if: steps.cache-ffmpeg-linux.outputs.cache-hit != 'true'
@@ -306,9 +307,17 @@ jobs:
             -Dcdda=disabled \
             -Drubberband=disabled \
             -Duchardet=disabled \
+            -Dx11=disabled \
+            -Dwayland=disabled \
+            -Ddrm=enabled \
+            -Dgbm=enabled \
             -Dvaapi=enabled \
+            -Dvaapi-drm=enabled \
+            -Dvaapi-wayland=disabled \
+            -Dvaapi-x11=disabled \
             -Dvulkan=disabled
-          ninja -C "$RUNNER_TEMP/mpv-linux-build"
+          set -o pipefail
+          ninja -C "$RUNNER_TEMP/mpv-linux-build" 2>&1 | tee "$RUNNER_TEMP/mpv-linux-build/ninja.log"
           meson install -C "$RUNNER_TEMP/mpv-linux-build" --no-rebuild
 
       - name: Print failure diagnostics (Linux)
@@ -319,6 +328,7 @@ jobs:
             "$RUNNER_TEMP/ffmpeg-src-linux/ffbuild/config.log" \
             "$RUNNER_TEMP/libass-build-linux/meson-logs/meson-log.txt" \
             "$RUNNER_TEMP/libplacebo-build-linux/meson-logs/meson-log.txt" \
+            "$RUNNER_TEMP/mpv-linux-build/ninja.log" \
             "$RUNNER_TEMP/mpv-linux-build/meson-logs/meson-log.txt"
           do
             if [ -f "$log" ]; then
@@ -338,6 +348,7 @@ jobs:
             ${{ runner.temp }}/ffmpeg-src-linux/ffbuild/config.log
             ${{ runner.temp }}/libass-build-linux/meson-logs/
             ${{ runner.temp }}/libplacebo-build-linux/meson-logs/
+            ${{ runner.temp }}/mpv-linux-build/ninja.log
             ${{ runner.temp }}/mpv-linux-build/meson-logs/
 
       - name: Upload artifacts (Linux)
@@ -896,6 +907,17 @@ jobs:
         run: |
           cp -a "$RUNNER_TEMP/source-code-lgpl/mpv-src" "$RUNNER_TEMP/mpv-src-android-${{ matrix.arch }}"
           export PKG_CONFIG_LIBDIR="$RUNNER_TEMP/ffmpeg-lgpl-android-${{ matrix.arch }}/lib/pkgconfig:$RUNNER_TEMP/libplacebo-android-${{ matrix.arch }}/lib/pkgconfig:$RUNNER_TEMP/vcpkg/installed/${{ matrix.vcpkg_triplet }}/lib/pkgconfig"
+          mpv_options_file="$RUNNER_TEMP/mpv-src-android-${{ matrix.arch }}/meson.options"
+          if [ ! -f "$mpv_options_file" ]; then
+            mpv_options_file="$RUNNER_TEMP/mpv-src-android-${{ matrix.arch }}/meson_options.txt"
+          fi
+          mpv_extra_options=()
+          if grep -q "option('audiotrack'" "$mpv_options_file"; then
+            mpv_extra_options+=("-Daudiotrack=enabled")
+          fi
+          if grep -q "option('aaudio'" "$mpv_options_file"; then
+            mpv_extra_options+=("-Daaudio=disabled")
+          fi
           meson setup "$RUNNER_TEMP/mpv-build-android-${{ matrix.arch }}" "$RUNNER_TEMP/mpv-src-android-${{ matrix.arch }}" \
             --cross-file "$RUNNER_TEMP/cross-android-${{ matrix.arch }}.txt" \
             --prefix="$RUNNER_TEMP/mpv-install-android-${{ matrix.arch }}" \
@@ -915,6 +937,7 @@ jobs:
             -Dcdda=disabled \
             -Drubberband=disabled \
             -Duchardet=disabled \
+            -Dopensles=enabled \
             -Dalsa=disabled \
             -Dpulse=disabled \
             -Dx11=disabled \
@@ -924,8 +947,10 @@ jobs:
             -Dgl=enabled \
             -Dplain-gl=enabled \
             -Degl-android=enabled \
-            -Dandroid-media-ndk=enabled
-          ninja -C "$RUNNER_TEMP/mpv-build-android-${{ matrix.arch }}"
+            -Dandroid-media-ndk=enabled \
+            "${mpv_extra_options[@]}"
+          set -o pipefail
+          ninja -C "$RUNNER_TEMP/mpv-build-android-${{ matrix.arch }}" 2>&1 | tee "$RUNNER_TEMP/mpv-build-android-${{ matrix.arch }}/ninja.log"
           meson install -C "$RUNNER_TEMP/mpv-build-android-${{ matrix.arch }}" --no-rebuild
 
       - name: Strip Android shared libraries (${{ matrix.arch }})
@@ -945,6 +970,7 @@ jobs:
           for log in \
             "$RUNNER_TEMP/ffmpeg-src-android-${{ matrix.arch }}/ffbuild/config.log" \
             "$RUNNER_TEMP/libplacebo-build-android-${{ matrix.arch }}/meson-logs/meson-log.txt" \
+            "$RUNNER_TEMP/mpv-build-android-${{ matrix.arch }}/ninja.log" \
             "$RUNNER_TEMP/mpv-build-android-${{ matrix.arch }}/meson-logs/meson-log.txt"
           do
             if [ -f "$log" ]; then
@@ -967,6 +993,7 @@ jobs:
           path: |
             ${{ runner.temp }}/ffmpeg-src-android-${{ matrix.arch }}/ffbuild/config.log
             ${{ runner.temp }}/libplacebo-build-android-${{ matrix.arch }}/meson-logs/
+            ${{ runner.temp }}/mpv-build-android-${{ matrix.arch }}/ninja.log
             ${{ runner.temp }}/vcpkg/buildtrees/**/*.log
             ${{ runner.temp }}/vcpkg/buildtrees/**/*.err
             ${{ runner.temp }}/vcpkg/buildtrees/**/config.log
