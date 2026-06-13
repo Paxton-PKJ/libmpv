@@ -307,7 +307,6 @@ jobs:
             -Drubberband=disabled \
             -Duchardet=disabled \
             -Dvaapi=enabled \
-            -Dvdpau=enabled \
             -Dvulkan=disabled
           ninja -C "$RUNNER_TEMP/mpv-linux-build"
           meson install -C "$RUNNER_TEMP/mpv-linux-build" --no-rebuild
