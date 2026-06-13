@@ -306,6 +306,8 @@ jobs:
             -Dcdda=disabled \
             -Drubberband=disabled \
             -Duchardet=disabled \
+            -Dvaapi=enabled \
+            -Dvdpau=enabled \
             -Dvulkan=disabled
           ninja -C "$RUNNER_TEMP/mpv-linux-build"
           meson install -C "$RUNNER_TEMP/mpv-linux-build" --no-rebuild
@@ -379,6 +381,7 @@ jobs:
             mingw-w64-x86_64-pkgconf
             mingw-w64-x86_64-python
             mingw-w64-x86_64-shaderc
+            mingw-w64-x86_64-spirv-cross
             mingw-w64-x86_64-vulkan-headers
             mingw-w64-x86_64-vulkan-loader
 
@@ -418,6 +421,10 @@ jobs:
           grep -q '^CONFIG_HTTP_PROTOCOL=yes' ffbuild/config.mak
           grep -q '^CONFIG_TLS_PROTOCOL=yes' ffbuild/config.mak
           grep -q '^CONFIG_HTTPS_PROTOCOL=yes' ffbuild/config.mak
+          # Hardware decode (hw / hw+) requires the D3D11VA + DXVA2 hwaccels.
+          grep -E '^(CONFIG_(D3D11VA|DXVA2))=yes' ffbuild/config.mak || true
+          grep -q '^CONFIG_D3D11VA=yes' ffbuild/config.mak
+          grep -q '^CONFIG_DXVA2=yes' ffbuild/config.mak
           make -j"$(nproc)"
           make install
 
@@ -455,7 +462,7 @@ jobs:
             -Dvulkan=enabled \
             -Dvk-proc-addr=enabled \
             -Dopengl=enabled \
-            -Dd3d11=disabled \
+            -Dd3d11=enabled \
             -Dglslang=disabled \
             -Dshaderc=enabled \
             -Dlcms=disabled \
@@ -490,6 +497,8 @@ jobs:
             -Dcdda=disabled \
             -Drubberband=disabled \
             -Duchardet=disabled \
+            -Dd3d11=enabled \
+            -Dd3d-hwaccel=enabled \
             -Dvulkan=enabled
           ninja -C "$WORKDIR/mpv-win64-build"
           meson install -C "$WORKDIR/mpv-win64-build" --no-rebuild
@@ -828,6 +837,10 @@ jobs:
           grep -q '^CONFIG_HTTP_PROTOCOL=yes' ffbuild/config.mak
           grep -q '^CONFIG_TLS_PROTOCOL=yes' ffbuild/config.mak
           grep -q '^CONFIG_HTTPS_PROTOCOL=yes' ffbuild/config.mak
+          # Hardware decode (hw / hw+) requires MediaCodec + JNI.
+          grep -E '^(CONFIG_(MEDIACODEC|JNI))=yes' ffbuild/config.mak || true
+          grep -q '^CONFIG_MEDIACODEC=yes' ffbuild/config.mak
+          grep -q '^CONFIG_JNI=yes' ffbuild/config.mak
           make -j"$(nproc)"
           make install
 
